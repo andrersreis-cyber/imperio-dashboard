@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+:root {
+  --color-gold: #D4AF37;
+  --color-gold-dark: #B8960C;
+  --color-bg-dark: #0a0a0a;
+  --color-bg-card: #1a1a1a;
+  --color-bg-light: #2a2a2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--color-bg-dark);
+  color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar personalizada */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+}
+
+/* Animações */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Classes utilitárias personalizadas */
+.bg-gold {
+  background-color: var(--color-gold);
+}
+
+.text-gold {
+  color: var(--color-gold);
+}
+
+.border-gold {
+  border-color: var(--color-gold);
+}
+
+.bg-card {
+  background-color: var(--color-bg-card);
+}
+
+.bg-card-light {
+  background-color: var(--color-bg-light);
+}
