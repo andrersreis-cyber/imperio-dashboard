@@ -7,6 +7,7 @@ import { Clients } from './pages/Clients'
 import { Reports } from './pages/Reports'
 import { Login } from './pages/Login'
 import { Cardapio } from './pages/Cardapio'
+import { PDV } from './pages/PDV'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -52,6 +53,7 @@ function App() {
             <Route path="pedidos" element={<Orders />} />
             <Route path="clientes" element={<Clients />} />
             <Route path="relatorios" element={<Reports />} />
+            <Route path="pdv" element={<PDV />} />
           </Route>
         ) : (
           <Route path="*" element={<Login onLogin={setUser} />} />

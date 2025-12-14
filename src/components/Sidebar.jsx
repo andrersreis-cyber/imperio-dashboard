@@ -4,12 +4,14 @@ import {
     ClipboardList,
     Users,
     BarChart3,
-    LogOut
+    LogOut,
+    ShoppingCart
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const menuItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { path: '/pdv', icon: ShoppingCart, label: 'PDV' },
     { path: '/pedidos', icon: ClipboardList, label: 'Pedidos' },
     { path: '/clientes', icon: Users, label: 'Clientes' },
     { path: '/relatorios', icon: BarChart3, label: 'Relatórios' },
