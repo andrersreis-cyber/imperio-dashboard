@@ -6,6 +6,7 @@ import { Orders } from './pages/Orders'
 import { Clients } from './pages/Clients'
 import { Reports } from './pages/Reports'
 import { Login } from './pages/Login'
+import { Cardapio } from './pages/Cardapio'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -38,19 +39,23 @@ function App() {
     )
   }
 
-  if (!user) {
-    return <Login onLogin={setUser} />
-  }
-
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="pedidos" element={<Orders />} />
-          <Route path="clientes" element={<Clients />} />
-          <Route path="relatorios" element={<Reports />} />
-        </Route>
+        {/* Rota pública do Cardápio Digital */}
+        <Route path="/cardapio" element={<Cardapio />} />
+
+        {/* Rotas protegidas do Dashboard */}
+        {user ? (
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="pedidos" element={<Orders />} />
+            <Route path="clientes" element={<Clients />} />
+            <Route path="relatorios" element={<Reports />} />
+          </Route>
+        ) : (
+          <Route path="*" element={<Login onLogin={setUser} />} />
+        )}
       </Routes>
     </BrowserRouter>
   )
