@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
-import { Orders } from './pages/Orders'
+import { Pedidos } from './pages/Pedidos'
 import { Clients } from './pages/Clients'
 import { Reports } from './pages/Reports'
 import { Login } from './pages/Login'
@@ -50,7 +50,7 @@ function App() {
         {user ? (
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
-            <Route path="pedidos" element={<Orders />} />
+            <Route path="pedidos" element={<Pedidos />} />
             <Route path="clientes" element={<Clients />} />
             <Route path="relatorios" element={<Reports />} />
             <Route path="pdv" element={<PDV />} />
