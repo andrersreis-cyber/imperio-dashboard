@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { ShoppingBag, Plus, Minus, X, Send, CreditCard, Clock, Gift, MapPin, ChevronRight, Store } from 'lucide-react'
+import { ShoppingBag, Plus, Minus, X, Send, CreditCard, Clock, Gift, MapPin, ChevronRight, Store, User, Check } from 'lucide-react'
 import { Checkout } from '../components/Checkout'
 
 const LOGO_URL = 'https://cxhypcvdijqauaibcgyp.supabase.co/storage/v1/object/public/produtos/logo-imperio.png'
@@ -62,6 +62,11 @@ export function Cardapio() {
     const [loading, setLoading] = useState(true)
     const [endereco, setEndereco] = useState({ rua: '', numero: '', bairro: '', complemento: '' })
     const [taxaEntrega, setTaxaEntrega] = useState(0)
+    const [formaPagamento, setFormaPagamento] = useState('')
+    const [precisaTroco, setPrecisaTroco] = useState(false)
+    const [trocoParaValor, setTrocoParaValor] = useState('')
+    const [nomeCliente, setNomeCliente] = useState('')
+    const [telefoneCliente, setTelefoneCliente] = useState('')
 
     useEffect(() => {
         fetchData()
@@ -121,6 +126,56 @@ export function Cardapio() {
         })
         mensagem += `\n💰 *Total: ${formatarPreco(calcularTotal())}*`
         window.open(`https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`, '_blank')
+    }
+
+    const finalizarPedido = async () => {
+        try {
+            // Criar pedido no banco
+            const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
+            const totalFinal = calcularTotal() + taxaEntrega
+
+            // Observações com troco se necessário
+            let observacoes = endereco.complemento || ''
+            if (formaPagamento === 'dinheiro' && precisaTroco && trocoParaValor) {
+                observacoes += ` | Troco para R$ ${trocoParaValor}`
+            }
+
+            const { data: pedido, error } = await supabase
+                .from('pedidos')
+                .insert({
+                    phone: telefoneCliente,
+                    nome_cliente: nomeCliente,
+                    itens: itensTexto,
+                    valor_total: totalFinal,
+                    taxa_entrega: taxaEntrega,
+                    endereco_entrega: `${endereco.rua}, ${endereco.numero}`,
+                    bairro: endereco.bairro,
+                    forma_pagamento: formaPagamento,
+                    observacoes: observacoes,
+                    status: 'pendente',
+                    modalidade: 'delivery'
+                })
+                .select()
+                .single()
+
+            if (error) throw error
+
+            // Limpar carrinho e mostrar confirmação
+            alert(`✅ Pedido #${pedido.id} enviado com sucesso!\n\nAguarde a confirmação pelo WhatsApp.`)
+            setCarrinho([])
+            setShowCarrinho(false)
+            setFormaPagamento('')
+            setNomeCliente('')
+            setTelefoneCliente('')
+            setPrecisaTroco(false)
+            setTrocoParaValor('')
+            setEndereco({ rua: '', numero: '', bairro: '', complemento: '' })
+            setTaxaEntrega(0)
+
+        } catch (error) {
+            console.error('Erro ao criar pedido:', error)
+            alert('Erro ao enviar pedido. Tente novamente.')
+        }
     }
 
     const produtosFiltrados = categoriaAtiva ? produtos.filter(p => p.categoria_id === categoriaAtiva) : produtos
@@ -277,75 +332,210 @@ export function Cardapio() {
                 {/* Modal Carrinho */}
                 {showCarrinho && (
                     <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center">
-                        <div className="bg-white w-full max-w-md rounded-t-2xl max-h-[85vh] overflow-hidden">
-                            <div className="flex items-center justify-between p-4 border-b">
-                                <h2 className="text-lg font-bold text-gray-900">Sacola</h2>
-                                <button onClick={() => setShowCarrinho(false)} className="p-2 text-gray-600"><X size={24} /></button>
+                        <div className="bg-white w-full max-w-md rounded-t-2xl max-h-[95vh] flex flex-col">
+                            {/* Header Fixo */}
+                            <div className="flex items-center justify-between p-4 border-b flex-shrink-0">
+                                <h2 className="text-lg font-bold text-gray-900">Sacola ({carrinho.reduce((t, i) => t + i.quantidade, 0)})</h2>
+                                <button onClick={() => setShowCarrinho(false)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full"><X size={24} /></button>
                             </div>
-                            <div className="p-4 overflow-y-auto max-h-[40vh] space-y-4">
+
+                            {/* Conteúdo com Scroll */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
+                                {/* Lista de Itens */}
                                 {carrinho.map(item => (
-                                    <div key={item.id} className="flex items-center justify-between">
-                                        <div className="flex-1">
+                                    <div key={item.id} className="flex items-center justify-between border-b border-gray-100 pb-3 last:border-0 mb-3">
+                                        <div className="flex-1 pr-4">
                                             <h4 className="font-medium text-gray-900">{item.nome}</h4>
                                             <p className="text-red-500 text-sm font-semibold">{formatarPreco(item.preco)}</p>
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <button onClick={() => removerDoCarrinho(item.id)} className="w-8 h-8 bg-gray-300 text-gray-700 rounded-full flex items-center justify-center border border-gray-400">
+                                        <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-1">
+                                            <button onClick={() => removerDoCarrinho(item.id)} className="w-8 h-8 hover:bg-white text-gray-700 rounded-md flex items-center justify-center transition-colors">
                                                 <Minus size={16} />
                                             </button>
-                                            <span className="w-6 text-center font-bold text-gray-900">{item.quantidade}</span>
-                                            <button onClick={() => adicionarAoCarrinho(item)} className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center">
+                                            <span className="w-6 text-center font-bold text-gray-900 text-sm">{item.quantidade}</span>
+                                            <button onClick={() => adicionarAoCarrinho(item)} className="w-8 h-8 bg-red-500 text-white rounded-md flex items-center justify-center shadow-lg shadow-red-200">
                                                 <Plus size={16} />
                                             </button>
                                         </div>
                                     </div>
                                 ))}
-                            </div>
-                            {carrinho.length > 0 && (
-                                <div className="p-4 border-t space-y-3">
-                                    {/* Subtotal */}
-                                    <div className="flex justify-between text-gray-600">
-                                        <span>Subtotal</span>
-                                        <span>{formatarPreco(calcularTotal())}</span>
-                                    </div>
-                                    {/* Taxa de entrega */}
-                                    <div className="flex justify-between text-gray-600">
-                                        <span>Taxa de entrega</span>
-                                        <span>{taxaEntrega > 0 ? formatarPreco(taxaEntrega) : 'Selecione o bairro'}</span>
-                                    </div>
-                                    {/* Endereço selecionado */}
-                                    {endereco.bairro && (
-                                        <div className="bg-gray-50 p-3 rounded-lg text-sm">
-                                            <p className="font-medium text-gray-900">{endereco.rua}, {endereco.numero}</p>
-                                            <p className="text-gray-600">{endereco.bairro} {endereco.complemento && `- ${endereco.complemento}`}</p>
+
+                                {/* Resumo e Formulário */}
+                                {carrinho.length > 0 && (
+                                    <div className="space-y-6 pt-2">
+                                        {/* Valores */}
+                                        <div className="bg-gray-50 p-4 rounded-xl space-y-2">
+                                            <div className="flex justify-between text-gray-600 text-sm">
+                                                <span>Subtotal</span>
+                                                <span>{formatarPreco(calcularTotal())}</span>
+                                            </div>
+                                            <div className="flex justify-between text-gray-600 text-sm">
+                                                <span>Taxa de entrega</span>
+                                                <span>{taxaEntrega > 0 ? formatarPreco(taxaEntrega) : 'Selecione o bairro'}</span>
+                                            </div>
                                         </div>
-                                    )}
-                                    {/* Total */}
-                                    <div className="flex justify-between font-bold text-lg border-t pt-3">
-                                        <span className="text-gray-900">Total</span>
-                                        <span className="text-red-500">{formatarPreco(calcularTotal() + taxaEntrega)}</span>
+
+                                        {/* Se não tem endereço, mostrar aviso */}
+                                        {!endereco.bairro ? (
+                                            <div className="text-center py-8 px-4 bg-white rounded-2xl border-2 border-dashed border-gray-200">
+                                                <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                                                    <MapPin className="h-8 w-8 text-blue-500" />
+                                                </div>
+                                                <h3 className="font-bold text-gray-900 mb-2">Onde vamos entregar?</h3>
+                                                <p className="text-gray-500 mb-6 text-sm">Informe seu endereço para calcular a taxa de entrega e ver as opções de pagamento.</p>
+                                                <button
+                                                    onClick={() => { setShowCarrinho(false); setShowEndereco(true); }}
+                                                    className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-200"
+                                                >
+                                                    <MapPin size={20} /> Informar Endereço
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                                {/* Card Endereço */}
+                                                <div className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm relative overflow-hidden">
+                                                    <div className="absolute top-0 right-0 w-20 h-20 bg-blue-50 rounded-bl-full -mr-10 -mt-10 opacity-50"></div>
+                                                    <div className="flex items-start gap-3 relative z-10">
+                                                        <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
+                                                            <MapPin size={20} />
+                                                        </div>
+                                                        <div className="flex-1">
+                                                            <p className="font-bold text-gray-900 text-sm">{endereco.rua}, {endereco.numero}</p>
+                                                            <p className="text-gray-600 text-xs">{endereco.bairro}</p>
+                                                            {endereco.complemento && <p className="text-gray-500 text-xs">{endereco.complemento}</p>}
+                                                        </div>
+                                                        <button
+                                                            onClick={() => { setShowCarrinho(false); setShowEndereco(true); }}
+                                                            className="text-blue-600 text-xs font-bold hover:underline self-start mt-1"
+                                                        >
+                                                            ALTERAR
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Dados Pessoais */}
+                                                <div className="space-y-3">
+                                                    <h4 className="font-bold text-gray-900 flex items-center gap-2 text-sm uppercase tracking-wide text-gray-500">
+                                                        <User size={16} /> Seus Dados
+                                                    </h4>
+                                                    <div className="space-y-3">
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Nome completo *"
+                                                            value={nomeCliente}
+                                                            onChange={(e) => setNomeCliente(e.target.value)}
+                                                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:bg-white focus:ring-2 focus:ring-red-500 outline-none transition-all"
+                                                        />
+                                                        <input
+                                                            type="tel"
+                                                            placeholder="WhatsApp (27) 99999-9999 *"
+                                                            value={telefoneCliente}
+                                                            onChange={(e) => setTelefoneCliente(e.target.value)}
+                                                            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:bg-white focus:ring-2 focus:ring-red-500 outline-none transition-all"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                {/* Forma de Pagamento */}
+                                                <div className="space-y-3">
+                                                    <h4 className="font-bold text-gray-900 flex items-center gap-2 text-sm uppercase tracking-wide text-gray-500">
+                                                        <CreditCard size={16} /> Pagamento
+                                                    </h4>
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {[
+                                                            { id: 'pix', label: 'PIX', icon: '💠', desc: '-5%' },
+                                                            { id: 'dinheiro', label: 'Dinheiro', icon: '💵', desc: '' },
+                                                            { id: 'credito', label: 'Crédito', icon: '💳', desc: '' },
+                                                            { id: 'debito', label: 'Débito', icon: '💳', desc: '' }
+                                                        ].map(op => (
+                                                            <button
+                                                                key={op.id}
+                                                                onClick={() => { setFormaPagamento(op.id); if (op.id !== 'dinheiro') setPrecisaTroco(false); }}
+                                                                className={`p-3 rounded-xl border-2 text-left transition-all relative overflow-hidden ${formaPagamento === op.id
+                                                                    ? 'border-red-500 bg-red-50 shadow-sm'
+                                                                    : 'border-gray-100 bg-white hover:border-gray-300'
+                                                                    }`}
+                                                            >
+                                                                <div className="flex justify-between items-center mb-1 relative z-10">
+                                                                    <span className="text-xl">{op.icon}</span>
+                                                                    {op.id === 'pix' && <span className="bg-green-100 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded">OFF</span>}
+                                                                </div>
+                                                                <span className={`block font-bold text-sm relative z-10 ${formaPagamento === op.id ? 'text-red-700' : 'text-gray-700'}`}>{op.label}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Troco */}
+                                                    {formaPagamento === 'dinheiro' && (
+                                                        <div className="bg-yellow-50 p-4 rounded-xl space-y-3 border border-yellow-200 animate-in zoom-in-95 duration-200">
+                                                            <label className="flex items-center gap-3 text-gray-800 font-medium cursor-pointer select-none">
+                                                                <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${precisaTroco ? 'bg-red-500 border-red-500' : 'bg-white border-gray-400'}`}>
+                                                                    {precisaTroco && <Check size={12} className="text-white" />}
+                                                                </div>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={precisaTroco}
+                                                                    onChange={(e) => setPrecisaTroco(e.target.checked)}
+                                                                    className="hidden"
+                                                                />
+                                                                Precisa de troco?
+                                                            </label>
+                                                            {precisaTroco && (
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="Troco para quanto? (ex: 50,00)"
+                                                                    value={trocoParaValor}
+                                                                    onChange={(e) => setTrocoParaValor(e.target.value)}
+                                                                    className="w-full p-3 bg-white border border-yellow-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-yellow-500 outline-none shadow-sm"
+                                                                    autoFocus
+                                                                    inputMode="decimal"
+                                                                />
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
-                                    {/* Botão Voltar ao Cardápio */}
-                                    <button onClick={() => setShowCarrinho(false)} className="w-full py-3 bg-gray-100 text-gray-700 rounded-xl font-bold border border-gray-300">
-                                        ← Adicionar mais itens
-                                    </button>
-                                    {/* Botão Endereço ou Finalizar */}
-                                    {!endereco.bairro ? (
-                                        <button onClick={() => { setShowCarrinho(false); setShowEndereco(true); }} className="w-full py-4 bg-blue-500 text-white rounded-xl font-bold flex items-center justify-center gap-2">
-                                            <MapPin size={20} /> Informar Endereço de Entrega
+                                )}
+                            </div>
+
+                            {/* Footer Fixo (Sempre visível) */}
+                            <div className="p-4 bg-white border-t border-gray-100 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] z-20 sticky bottom-0 safe-area-bottom">
+                                <div className="flex justify-between items-end mb-3">
+                                    <span className="text-gray-500 text-sm font-medium">Total a pagar</span>
+                                    <div className="text-right">
+                                        <span className="text-2xl font-bold text-gray-900">{formatarPreco(calcularTotal() + (endereco.bairro ? taxaEntrega : 0))}</span>
+                                        {taxaEntrega > 0 && <p className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Entrega inclusa</p>}
+                                    </div>
+                                </div>
+
+                                {carrinho.length > 0 ? (
+                                    endereco.bairro ? (
+                                        <button
+                                            onClick={finalizarPedido}
+                                            disabled={!nomeCliente || !telefoneCliente || !formaPagamento || (formaPagamento === 'dinheiro' && precisaTroco && !trocoParaValor)}
+                                            className="w-full py-4 bg-gradient-to-r from-red-600 to-red-500 text-white rounded-xl font-bold text-lg shadow-lg shadow-red-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed hover:scale-[1.02] active:scale-[0.98] transition-all"
+                                        >
+                                            <span>Finalizar Pedido</span>
+                                            <Send size={20} />
                                         </button>
                                     ) : (
-                                        <>
-                                            <button onClick={() => { setShowCarrinho(false); setShowCheckout(true); }} className="w-full py-4 bg-red-500 text-white rounded-xl font-bold flex items-center justify-center gap-2">
-                                                <CreditCard size={20} /> Pagar Online (PIX)
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button onClick={() => setShowCarrinho(false)} className="py-3 px-4 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm">
+                                                Voltar
                                             </button>
-                                            <button onClick={enviarPedidoWhatsApp} className="w-full py-3 bg-green-500 text-white rounded-xl font-bold flex items-center justify-center gap-2">
-                                                <Send size={20} /> Pedir via WhatsApp
+                                            <button onClick={() => { setShowCarrinho(false); setShowEndereco(true); }} className="py-3 px-4 bg-blue-500 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-200">
+                                                Endereço <MapPin size={16} />
                                             </button>
-                                        </>
-                                    )}
-                                </div>
-                            )}
+                                        </div>
+                                    )
+                                ) : (
+                                    <button onClick={() => setShowCarrinho(false)} className="w-full py-4 bg-gray-100 text-gray-600 rounded-xl font-bold">
+                                        Voltar ao Cardápio
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 )}

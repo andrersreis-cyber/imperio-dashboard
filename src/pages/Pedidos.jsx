@@ -12,6 +12,8 @@ import {
     Bell
 } from 'lucide-react'
 
+const N8N_WEBHOOK_URL = 'https://n8nwebhook.agenteflowia.com/webhook/status-pedido'
+
 const STATUS_CONFIG = {
     pendente: { label: 'Pendente', color: 'bg-yellow-500', icon: Clock },
     confirmado: { label: 'Confirmado', color: 'bg-blue-500', icon: CheckCircle },
@@ -81,7 +83,48 @@ export function Pedidos() {
         }
     }
 
+    const enviarNotificacaoN8N = async (pedido, novoStatus) => {
+        if (!pedido.phone) return
+
+        const mensagens = {
+            confirmado: `Olá ${pedido.nome_cliente || 'Cliente'}! Seu pedido foi *CONFIRMADO* e já está sendo preparado! 🍗`,
+            preparando: `Olá ${pedido.nome_cliente || 'Cliente'}! Seu pedido está sendo *PREPARADO* com carinho! ⏳`,
+            saiu: `Olá ${pedido.nome_cliente || 'Cliente'}! Seu pedido *SAIU PARA ENTREGA*! 🛵 Aguarde em breve!`,
+            entregue: `Olá ${pedido.nome_cliente || 'Cliente'}! Obrigado por pedir no Império das Porções! 🎉 Bom apetite!`
+        }
+
+        const mensagem = mensagens[novoStatus]
+
+        if (mensagem && N8N_WEBHOOK_URL.includes('webhook')) {
+            try {
+                // Envia dados para o N8N processar e enviar o WhatsApp
+                await fetch(N8N_WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        telefone: `55${pedido.phone.replace(/\D/g, '')}`, // Adiciona 55 do Brasil
+                        nome: pedido.nome_cliente,
+                        status: novoStatus,
+                        mensagem: mensagem,
+                        pedidoId: pedido.id
+                    })
+                })
+                console.log('Notificação enviada para N8N:', novoStatus)
+            } catch (error) {
+                console.error('Erro ao enviar para N8N:', error)
+            }
+        }
+    }
+
     const atualizarStatus = async (pedidoId, novoStatus) => {
+        // Encontra o pedido atual para pegar dados do cliente
+        const pedido = pedidos.find(p => p.id === pedidoId)
+
+        // Notifica o cliente via N8N se tiver telefone
+        if (pedido && pedido.phone) {
+            enviarNotificacaoN8N(pedido, novoStatus)
+        }
+
         // Optimistic update - atualiza imediatamente na tela
         setPedidos(prev => prev.map(p =>
             p.id === pedidoId ? { ...p, status: novoStatus } : p
@@ -99,19 +142,6 @@ export function Pedidos() {
             fetchPedidos()
             alert('Erro ao atualizar status. Tente novamente.')
         }
-    }
-
-    const abrirWhatsApp = (telefone, nome, status) => {
-        const mensagens = {
-            confirmado: `Olá ${nome}! Seu pedido foi *CONFIRMADO* e já está sendo preparado! 🍗`,
-            preparando: `Olá ${nome}! Seu pedido está sendo *PREPARADO* com carinho! ⏳`,
-            saiu: `Olá ${nome}! Seu pedido *SAIU PARA ENTREGA*! 🛵 Aguarde em breve!`,
-            entregue: `Olá ${nome}! Obrigado por pedir no Império das Porções! 🎉 Bom apetite!`
-        }
-
-        const mensagem = mensagens[status] || `Olá ${nome}! Atualização sobre seu pedido.`
-        const tel = telefone.replace(/\D/g, '')
-        window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(mensagem)}`, '_blank')
     }
 
     const formatarData = (dataString) => {
@@ -138,38 +168,35 @@ export function Pedidos() {
     const contarPorStatus = (status) => pedidos.filter(p => p.status === status).length
 
     return (
-        <div className="p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
+        <div className="container mx-auto p-4 max-w-7xl">
+            <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900">Pedidos</h1>
-                    <p className="text-gray-500">Gerenciamento em tempo real</p>
+                    <h1 className="text-3xl font-bold text-gray-800">Gerenciador de Pedidos</h1>
+                    <p className="text-gray-500">Acompanhe seus pedidos em tempo real</p>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 bg-white p-2 rounded-lg shadow-sm border">
+                    <span className="flex h-3 w-3 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                    <span className="text-sm font-medium text-gray-600">Sistema Online</span>
                     <button
                         onClick={() => setAudioEnabled(!audioEnabled)}
-                        className={`p-2 rounded-lg ${audioEnabled ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}
-                        title={audioEnabled ? 'Som ativado' : 'Som desativado'}
+                        className={`ml-2 p-2 rounded-full ${audioEnabled ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}`}
+                        title="Som de notificação"
                     >
-                        <Bell size={20} />
-                    </button>
-                    <button
-                        onClick={fetchPedidos}
-                        className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
-                    >
-                        <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-                        Atualizar
+                        <Bell size={18} />
                     </button>
                 </div>
             </div>
 
-            {/* Filtros por Status */}
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* Filtros de Status */}
+            <div className="flex flex-wrap gap-2 mb-8 overflow-x-auto pb-2 scrollbar-hide">
                 <button
                     onClick={() => setFiltroStatus('todos')}
-                    className={`px-4 py-2.5 rounded-lg font-bold border-2 transition-all ${filtroStatus === 'todos'
-                        ? 'bg-white text-gray-900 border-white shadow-lg'
-                        : 'bg-gray-800 text-white border-gray-600 hover:bg-gray-700'
+                    className={`px-4 py-2 rounded-lg font-bold transition-all ${filtroStatus === 'todos'
+                        ? 'bg-gray-900 text-white shadow-lg scale-105'
+                        : 'bg-white text-gray-600 hover:bg-gray-100 border'
                         }`}
                 >
                     Todos ({pedidos.length})
@@ -248,70 +275,57 @@ export function Pedidos() {
                                     <div className="flex items-center justify-between mb-4">
                                         <div>
                                             <p className="text-xs text-gray-500 uppercase font-semibold">Total</p>
-                                            <p className="text-2xl font-bold text-red-600">{formatarPreco(pedido.valor_total)}</p>
+                                            <p className="text-xl font-bold text-gray-900">{formatarPreco(pedido.valor_total)}</p>
                                         </div>
-                                        {pedido.taxa_entrega > 0 && (
-                                            <div className="text-right">
-                                                <p className="text-xs text-gray-400">Taxa entrega</p>
-                                                <p className="text-sm text-gray-600">{formatarPreco(pedido.taxa_entrega)}</p>
-                                            </div>
-                                        )}
                                         <div className="text-right">
-                                            <p className="text-xs text-gray-400">Pagamento</p>
-                                            <p className="text-sm font-medium text-gray-700 capitalize">{pedido.forma_pagamento}</p>
+                                            <p className="text-xs text-gray-500 uppercase font-semibold">Pagamento</p>
+                                            <p className="font-medium text-gray-700 capitalize">{pedido.forma_pagamento}</p>
                                         </div>
                                     </div>
 
-                                    {/* Ações */}
-                                    <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+                                    {/* Botões de Ação */}
+                                    <div className="grid grid-cols-2 gap-2">
                                         {pedido.status === 'pendente' && (
-                                            <button
-                                                onClick={() => atualizarStatus(pedido.id, 'confirmado')}
-                                                className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 shadow-md"
-                                            >
-                                                ✓ Confirmar
-                                            </button>
+                                            <>
+                                                <button
+                                                    onClick={() => atualizarStatus(pedido.id, 'cancelado')}
+                                                    className="px-3 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 font-bold text-sm transition-colors"
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button
+                                                    onClick={() => atualizarStatus(pedido.id, 'confirmado')}
+                                                    className="px-3 py-2 rounded-lg bg-blue-500 text-white hover:bg-blue-600 font-bold text-sm shadow-md transition-colors"
+                                                >
+                                                    Confirmar
+                                                </button>
+                                            </>
                                         )}
+
                                         {pedido.status === 'confirmado' && (
                                             <button
                                                 onClick={() => atualizarStatus(pedido.id, 'preparando')}
-                                                className="flex-1 px-4 py-2.5 bg-orange-500 text-white rounded-lg text-sm font-bold hover:bg-orange-600 shadow-md"
+                                                className="col-span-2 px-3 py-2 rounded-lg bg-orange-500 text-white hover:bg-orange-600 font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2"
                                             >
-                                                🍳 Em Preparo
+                                                <ChefHat size={16} /> Iniciar Preparo
                                             </button>
                                         )}
+
                                         {pedido.status === 'preparando' && (
                                             <button
                                                 onClick={() => atualizarStatus(pedido.id, 'saiu')}
-                                                className="flex-1 px-4 py-2.5 bg-purple-600 text-white rounded-lg text-sm font-bold hover:bg-purple-700 shadow-md"
+                                                className="col-span-2 px-3 py-2 rounded-lg bg-purple-500 text-white hover:bg-purple-600 font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2"
                                             >
-                                                🛵 Saiu Entrega
+                                                <Truck size={16} /> Saiu para Entrega
                                             </button>
                                         )}
+
                                         {pedido.status === 'saiu' && (
                                             <button
                                                 onClick={() => atualizarStatus(pedido.id, 'entregue')}
-                                                className="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700 shadow-md"
+                                                className="col-span-2 px-3 py-2 rounded-lg bg-green-500 text-white hover:bg-green-600 font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2"
                                             >
-                                                ✓ Entregue
-                                            </button>
-                                        )}
-
-                                        <button
-                                            onClick={() => abrirWhatsApp(pedido.phone, pedido.nome_cliente, pedido.status)}
-                                            className="px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold hover:bg-emerald-600 shadow-md"
-                                            title="Enviar mensagem WhatsApp"
-                                        >
-                                            📱
-                                        </button>
-
-                                        {pedido.status !== 'cancelado' && pedido.status !== 'entregue' && (
-                                            <button
-                                                onClick={() => atualizarStatus(pedido.id, 'cancelado')}
-                                                className="px-4 py-2.5 bg-red-50 text-red-600 border-2 border-red-200 rounded-lg text-sm font-bold hover:bg-red-100"
-                                                title="Cancelar pedido"
-                                            >
-                                                ✕
+                                                <CheckCircle size={16} /> Confirmar Entrega
                                             </button>
                                         )}
                                     </div>

@@ -37,6 +37,30 @@ export function Checkout({ carrinho, total, taxaEntrega, enderecoEntrega, onVolt
         return pixCode
     }
 
+    // Número do restaurante para receber pedidos
+    const WHATSAPP_RESTAURANTE = '5527999099854'
+
+    const enviarNotificacaoRestaurante = (pedido, itens, endereco, bairro) => {
+        const mensagem = `🍗 *NOVO PEDIDO #${pedido.id}*
+
+👤 *Cliente:* ${dados.nome}
+📱 *Telefone:* ${dados.telefone}
+
+📍 *Endereço:*
+${endereco}, ${bairro}
+${dados.complemento ? `Complemento: ${dados.complemento}` : ''}
+
+🍽️ *Itens:*
+${itens}
+
+💰 *Total:* R$ ${total.toFixed(2).replace('.', ',')}
+💳 *Pagamento:* ${dados.formaPagamento.toUpperCase()}
+
+⏰ Pedido recebido via Cardápio Digital`
+
+        window.open(`https://wa.me/${WHATSAPP_RESTAURANTE}?text=${encodeURIComponent(mensagem)}`, '_blank')
+    }
+
     const criarPedido = async () => {
         setLoading(true)
 
@@ -65,6 +89,9 @@ export function Checkout({ carrinho, total, taxaEntrega, enderecoEntrega, onVolt
                 .single()
 
             if (pedidoError) throw pedidoError
+
+            // Enviar notificação WhatsApp para restaurante
+            enviarNotificacaoRestaurante(pedido, itensTexto, dados.endereco, dados.bairro)
 
             // Se for PIX, criar registro de pagamento
             if (dados.formaPagamento === 'pix') {
