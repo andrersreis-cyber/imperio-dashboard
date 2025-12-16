@@ -22,6 +22,9 @@ export function Garcom() {
     const [searchParams] = useSearchParams()
     const mesaParam = searchParams.get('mesa')
 
+    // Senha de acesso para garçons
+    const SENHA_GARCOM = 'imperio123'
+
     const [mesas, setMesas] = useState([])
     const [mesaSelecionada, setMesaSelecionada] = useState(null)
     const [comanda, setComanda] = useState(null)
@@ -38,6 +41,21 @@ export function Garcom() {
     const [showScanner, setShowScanner] = useState(false)
     const [scannerReady, setScannerReady] = useState(false)
     const scannerRef = useRef(null)
+
+    // Estado de autenticação (salvo em sessionStorage para persistir na sessão)
+    const [autenticado, setAutenticado] = useState(sessionStorage.getItem('garcomAuth') === 'true')
+    const [senhaDigitada, setSenhaDigitada] = useState('')
+    const [erroSenha, setErroSenha] = useState(false)
+
+    const verificarSenha = () => {
+        if (senhaDigitada === SENHA_GARCOM) {
+            sessionStorage.setItem('garcomAuth', 'true')
+            setAutenticado(true)
+            setErroSenha(false)
+        } else {
+            setErroSenha(true)
+        }
+    }
 
     useEffect(() => {
         fetchData()
@@ -288,6 +306,45 @@ export function Garcom() {
         }
         setShowScanner(false)
         setScannerReady(false)
+    }
+
+    // Tela de senha de acesso
+    if (!autenticado) {
+        return (
+            <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+                <div className="bg-[#1a1a1a] rounded-xl p-8 max-w-md w-full border border-gray-800">
+                    <div className="text-center mb-6">
+                        <span className="text-5xl">🔐</span>
+                        <h1 className="text-2xl font-bold text-[#D4AF37] mt-4">Área do Garçom</h1>
+                        <p className="text-gray-400 mt-2">Digite a senha de acesso</p>
+                    </div>
+
+                    <div className="mb-6">
+                        <input
+                            type="password"
+                            value={senhaDigitada}
+                            onChange={(e) => { setSenhaDigitada(e.target.value); setErroSenha(false) }}
+                            placeholder="Senha de acesso"
+                            className={`w-full px-4 py-3 bg-gray-800 border rounded-lg text-lg text-center focus:outline-none ${erroSenha ? 'border-red-500' : 'border-gray-700 focus:border-[#D4AF37]'
+                                }`}
+                            autoFocus
+                            onKeyDown={(e) => e.key === 'Enter' && verificarSenha()}
+                        />
+                        {erroSenha && (
+                            <p className="text-red-500 text-sm mt-2 text-center">Senha incorreta!</p>
+                        )}
+                    </div>
+
+                    <button
+                        onClick={verificarSenha}
+                        disabled={!senhaDigitada.trim()}
+                        className="w-full py-4 bg-[#D4AF37] text-black font-bold rounded-lg disabled:opacity-50"
+                    >
+                        Acessar
+                    </button>
+                </div>
+            </div>
+        )
     }
 
     // Modal para nome do garçom
