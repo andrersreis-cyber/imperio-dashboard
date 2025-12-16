@@ -14,7 +14,11 @@ import {
     Clock,
     Package,
     UtensilsCrossed,
-    ChevronDown
+    ChevronDown,
+    ArrowDownCircle,
+    ArrowUpCircle,
+    History,
+    FileText
 } from 'lucide-react'
 
 export function PDV() {
@@ -33,6 +37,16 @@ export function PDV() {
     const [mesaSelecionada, setMesaSelecionada] = useState(null)
     const [showSeletorMesa, setShowSeletorMesa] = useState(false)
     const searchRef = useRef(null)
+
+    // Novos estados para PDV Avançado
+    const [showSangria, setShowSangria] = useState(false)
+    const [showSuprimento, setShowSuprimento] = useState(false)
+    const [showHistorico, setShowHistorico] = useState(false)
+    const [valorMovimentacao, setValorMovimentacao] = useState('')
+    const [motivoMovimentacao, setMotivoMovimentacao] = useState('')
+    const [vendasDoDia, setVendasDoDia] = useState([])
+    const [movimentacoes, setMovimentacoes] = useState([])
+    const [relatorioCaixa, setRelatorioCaixa] = useState(null)
 
     useEffect(() => {
         fetchData()
@@ -100,27 +114,128 @@ export function PDV() {
         }
     }
 
-    const fecharCaixa = async () => {
-        // Calcular total de vendas
+    const carregarHistorico = async () => {
+        if (!caixaAberto) return
+
+        // Buscar vendas do caixa atual
         const { data: vendas } = await supabase
             .from('vendas_pdv')
-            .select('total')
+            .select('*')
+            .eq('caixa_id', caixaAberto.id)
+            .order('created_at', { ascending: false })
+
+        // Buscar movimentações do caixa atual
+        const { data: movs } = await supabase
+            .from('movimentacoes_caixa')
+            .select('*')
+            .eq('caixa_id', caixaAberto.id)
+            .order('created_at', { ascending: false })
+
+        setVendasDoDia(vendas || [])
+        setMovimentacoes(movs || [])
+    }
+
+    const prepararRelatorio = async () => {
+        if (!caixaAberto) return
+
+        // Buscar vendas
+        const { data: vendas } = await supabase
+            .from('vendas_pdv')
+            .select('*')
             .eq('caixa_id', caixaAberto.id)
 
-        const totalVendas = vendas?.reduce((sum, v) => sum + parseFloat(v.total), 0) || 0
-        const valorFinal = parseFloat(caixaAberto.valor_inicial) + totalVendas
+        // Buscar movimentações
+        const { data: movs } = await supabase
+            .from('movimentacoes_caixa')
+            .select('*')
+            .eq('caixa_id', caixaAberto.id)
+
+        // Calcular totais por forma de pagamento
+        const totais = {
+            dinheiro: 0,
+            debito: 0,
+            credito: 0,
+            pix: 0
+        }
+
+        vendas?.forEach(v => {
+            const forma = v.forma_pagamento || 'dinheiro'
+            totais[forma] = (totais[forma] || 0) + parseFloat(v.total)
+        })
+
+        // Calcular sangrias e suprimentos
+        const totalSangrias = movs?.filter(m => m.tipo === 'sangria')
+            .reduce((sum, m) => sum + parseFloat(m.valor), 0) || 0
+        const totalSuprimentos = movs?.filter(m => m.tipo === 'suprimento')
+            .reduce((sum, m) => sum + parseFloat(m.valor), 0) || 0
+
+        const totalVendas = Object.values(totais).reduce((a, b) => a + b, 0)
+        const dinheiroEmCaixa = parseFloat(caixaAberto.valor_inicial) + totais.dinheiro - totalSangrias + totalSuprimentos
+
+        setRelatorioCaixa({
+            abertura: caixaAberto.valor_inicial,
+            totais,
+            totalVendas,
+            totalSangrias,
+            totalSuprimentos,
+            dinheiroEmCaixa,
+            qtdVendas: vendas?.length || 0
+        })
+
+        setShowFecharCaixa(true)
+    }
+
+    const registrarSangria = async () => {
+        if (!caixaAberto || !valorMovimentacao) return
+
+        await supabase
+            .from('movimentacoes_caixa')
+            .insert({
+                caixa_id: caixaAberto.id,
+                tipo: 'sangria',
+                valor: parseFloat(valorMovimentacao),
+                motivo: motivoMovimentacao || 'Sangria',
+                operador: 'Admin'
+            })
+
+        setValorMovimentacao('')
+        setMotivoMovimentacao('')
+        setShowSangria(false)
+    }
+
+    const registrarSuprimento = async () => {
+        if (!caixaAberto || !valorMovimentacao) return
+
+        await supabase
+            .from('movimentacoes_caixa')
+            .insert({
+                caixa_id: caixaAberto.id,
+                tipo: 'suprimento',
+                valor: parseFloat(valorMovimentacao),
+                motivo: motivoMovimentacao || 'Suprimento',
+                operador: 'Admin'
+            })
+
+        setValorMovimentacao('')
+        setMotivoMovimentacao('')
+        setShowSuprimento(false)
+    }
+
+    const fecharCaixa = async () => {
+        if (!relatorioCaixa) return
 
         await supabase
             .from('caixa')
             .update({
                 status: 'fechado',
                 data_fechamento: new Date().toISOString(),
-                valor_final: valorFinal
+                valor_final: relatorioCaixa.dinheiroEmCaixa
             })
             .eq('id', caixaAberto.id)
 
         setCaixaAberto(null)
         setShowFecharCaixa(false)
+        setRelatorioCaixa(null)
         setShowAbrirCaixa(true)
     }
 
@@ -324,12 +439,36 @@ ${carrinho.map(item =>
                             />
                         </div>
 
-                        <button
-                            onClick={() => setShowFecharCaixa(true)}
-                            className="px-4 py-3 bg-red-500/20 text-red-400 rounded-lg flex items-center gap-2"
-                        >
-                            <Clock size={18} /> Fechar Caixa
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setShowSangria(true)}
+                                className="px-3 py-2 bg-red-500/20 text-red-400 rounded-lg flex items-center gap-1 text-sm"
+                                title="Sangria"
+                            >
+                                <ArrowDownCircle size={16} /> Sangria
+                            </button>
+                            <button
+                                onClick={() => setShowSuprimento(true)}
+                                className="px-3 py-2 bg-green-500/20 text-green-400 rounded-lg flex items-center gap-1 text-sm"
+                                title="Suprimento"
+                            >
+                                <ArrowUpCircle size={16} /> Suprimento
+                            </button>
+                            <button
+                                onClick={() => { carregarHistorico(); setShowHistorico(true) }}
+                                className="px-3 py-2 bg-blue-500/20 text-blue-400 rounded-lg flex items-center gap-1 text-sm"
+                                title="Histórico"
+                            >
+                                <History size={16} /> Histórico
+                            </button>
+                            <button
+                                onClick={prepararRelatorio}
+                                className="px-3 py-2 bg-purple-500/20 text-purple-400 rounded-lg flex items-center gap-1 text-sm"
+                                title="Fechar Caixa"
+                            >
+                                <FileText size={16} /> Fechar
+                            </button>
+                        </div>
                     </div>
 
                     {/* Categorias */}
@@ -383,8 +522,8 @@ ${carrinho.map(item =>
                         <button
                             onClick={() => setShowSeletorMesa(!showSeletorMesa)}
                             className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${mesaSelecionada
-                                    ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400'
-                                    : 'bg-gray-800 border border-gray-700 text-gray-400'
+                                ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400'
+                                : 'bg-gray-800 border border-gray-700 text-gray-400'
                                 }`}
                         >
                             <div className="flex items-center gap-2">
@@ -566,39 +705,275 @@ ${carrinho.map(item =>
                 </div>
             )}
 
-            {/* Modal Fechar Caixa */}
-            {showFecharCaixa && (
+            {/* Modal Sangria */}
+            {showSangria && (
                 <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
                     <div className="bg-[#1a1a1a] rounded-xl max-w-md w-full border border-gray-800">
                         <div className="flex items-center justify-between p-4 border-b border-gray-800">
-                            <h3 className="text-xl font-bold">Fechar Caixa</h3>
-                            <button onClick={() => setShowFecharCaixa(false)} className="p-2 hover:bg-gray-800 rounded">
+                            <h3 className="text-xl font-bold flex items-center gap-2 text-red-400">
+                                <ArrowDownCircle size={24} /> Sangria
+                            </h3>
+                            <button onClick={() => setShowSangria(false)} className="p-2 hover:bg-gray-800 rounded">
                                 <X size={20} />
                             </button>
                         </div>
 
-                        <div className="p-6 text-center">
-                            <span className="text-5xl">⚠️</span>
-                            <h4 className="text-xl font-bold mt-4">Confirma o fechamento?</h4>
-                            <p className="text-gray-400 mt-2">
-                                Caixa aberto desde {new Date(caixaAberto?.data_abertura).toLocaleString('pt-BR')}
-                            </p>
-                            <p className="text-gray-400 mt-1">
-                                Valor inicial: {formatarPreco(caixaAberto?.valor_inicial || 0)}
-                            </p>
+                        <div className="p-6">
+                            <p className="text-gray-400 mb-4">Retirar dinheiro do caixa</p>
 
-                            <div className="flex gap-3 mt-6">
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-400 mb-2">Valor (R$)</label>
+                                <input
+                                    type="number"
+                                    value={valorMovimentacao}
+                                    onChange={(e) => setValorMovimentacao(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-xl text-center focus:outline-none focus:border-red-500"
+                                    placeholder="0,00"
+                                    autoFocus
+                                />
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="block text-sm text-gray-400 mb-2">Motivo</label>
+                                <input
+                                    type="text"
+                                    value={motivoMovimentacao}
+                                    onChange={(e) => setMotivoMovimentacao(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-red-500"
+                                    placeholder="Ex: Pagamento fornecedor"
+                                />
+                            </div>
+
+                            <div className="flex gap-3">
                                 <button
-                                    onClick={() => setShowFecharCaixa(false)}
+                                    onClick={() => setShowSangria(false)}
+                                    className="flex-1 py-3 bg-gray-700 rounded-lg"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={registrarSangria}
+                                    disabled={!valorMovimentacao}
+                                    className="flex-1 py-3 bg-red-600 rounded-lg font-bold disabled:opacity-50"
+                                >
+                                    Confirmar Sangria
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal Suprimento */}
+            {showSuprimento && (
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#1a1a1a] rounded-xl max-w-md w-full border border-gray-800">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+                            <h3 className="text-xl font-bold flex items-center gap-2 text-green-400">
+                                <ArrowUpCircle size={24} /> Suprimento
+                            </h3>
+                            <button onClick={() => setShowSuprimento(false)} className="p-2 hover:bg-gray-800 rounded">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-6">
+                            <p className="text-gray-400 mb-4">Adicionar dinheiro ao caixa</p>
+
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-400 mb-2">Valor (R$)</label>
+                                <input
+                                    type="number"
+                                    value={valorMovimentacao}
+                                    onChange={(e) => setValorMovimentacao(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-xl text-center focus:outline-none focus:border-green-500"
+                                    placeholder="0,00"
+                                    autoFocus
+                                />
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="block text-sm text-gray-400 mb-2">Motivo</label>
+                                <input
+                                    type="text"
+                                    value={motivoMovimentacao}
+                                    onChange={(e) => setMotivoMovimentacao(e.target.value)}
+                                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-green-500"
+                                    placeholder="Ex: Troco adicional"
+                                />
+                            </div>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setShowSuprimento(false)}
+                                    className="flex-1 py-3 bg-gray-700 rounded-lg"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={registrarSuprimento}
+                                    disabled={!valorMovimentacao}
+                                    className="flex-1 py-3 bg-green-600 rounded-lg font-bold disabled:opacity-50"
+                                >
+                                    Confirmar Suprimento
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal Histórico */}
+            {showHistorico && (
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#1a1a1a] rounded-xl max-w-2xl w-full border border-gray-800 max-h-[80vh] flex flex-col">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+                            <h3 className="text-xl font-bold flex items-center gap-2 text-blue-400">
+                                <History size={24} /> Histórico do Caixa
+                            </h3>
+                            <button onClick={() => setShowHistorico(false)} className="p-2 hover:bg-gray-800 rounded">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4">
+                            {vendasDoDia.length === 0 && movimentacoes.length === 0 ? (
+                                <div className="text-center py-12 text-gray-500">
+                                    Nenhuma movimentação registrada
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {/* Combinar e ordenar vendas + movimentações */}
+                                    {[...vendasDoDia.map(v => ({ ...v, tipo: 'venda' })),
+                                    ...movimentacoes.map(m => ({ ...m, tipo: m.tipo }))]
+                                        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+                                        .map((item, idx) => (
+                                            <div key={idx} className={`flex items-center justify-between p-3 rounded-lg ${item.tipo === 'venda' ? 'bg-gray-800' :
+                                                    item.tipo === 'sangria' ? 'bg-red-900/30' : 'bg-green-900/30'
+                                                }`}>
+                                                <div>
+                                                    <span className="text-gray-400 text-sm">
+                                                        {new Date(item.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                    <span className="ml-3">
+                                                        {item.tipo === 'venda' ? `Venda #${item.id}` :
+                                                            item.tipo === 'sangria' ? `Sangria: ${item.motivo}` :
+                                                                `Suprimento: ${item.motivo}`}
+                                                    </span>
+                                                    {item.forma_pagamento && (
+                                                        <span className="ml-2 text-xs px-2 py-1 bg-gray-700 rounded uppercase">
+                                                            {item.forma_pagamento}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span className={`font-bold ${item.tipo === 'sangria' ? 'text-red-400' :
+                                                        item.tipo === 'suprimento' ? 'text-green-400' : 'text-[#D4AF37]'
+                                                    }`}>
+                                                    {item.tipo === 'sangria' ? '-' : ''}
+                                                    {formatarPreco(item.total || item.valor)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-gray-800">
+                            <button
+                                onClick={() => setShowHistorico(false)}
+                                className="w-full py-3 bg-gray-700 rounded-lg"
+                            >
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal Fechar Caixa - Relatório Detalhado */}
+            {showFecharCaixa && relatorioCaixa && (
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                    <div className="bg-[#1a1a1a] rounded-xl max-w-md w-full border border-gray-800">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-800">
+                            <h3 className="text-xl font-bold flex items-center gap-2">
+                                <FileText size={24} /> Relatório de Fechamento
+                            </h3>
+                            <button onClick={() => { setShowFecharCaixa(false); setRelatorioCaixa(null) }} className="p-2 hover:bg-gray-800 rounded">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-6">
+                            <div className="text-sm text-gray-400 mb-4">
+                                Caixa aberto: {new Date(caixaAberto?.data_abertura).toLocaleString('pt-BR')}
+                            </div>
+
+                            <div className="space-y-3 mb-6">
+                                <div className="flex justify-between p-3 bg-gray-800 rounded-lg">
+                                    <span>💰 Abertura</span>
+                                    <span className="font-bold">{formatarPreco(relatorioCaixa.abertura)}</span>
+                                </div>
+
+                                <div className="border-t border-gray-700 pt-3">
+                                    <div className="flex justify-between py-1">
+                                        <span>💵 Dinheiro</span>
+                                        <span>{formatarPreco(relatorioCaixa.totais.dinheiro)}</span>
+                                    </div>
+                                    <div className="flex justify-between py-1">
+                                        <span>💳 Débito</span>
+                                        <span>{formatarPreco(relatorioCaixa.totais.debito)}</span>
+                                    </div>
+                                    <div className="flex justify-between py-1">
+                                        <span>💳 Crédito</span>
+                                        <span>{formatarPreco(relatorioCaixa.totais.credito)}</span>
+                                    </div>
+                                    <div className="flex justify-between py-1">
+                                        <span>📱 PIX</span>
+                                        <span>{formatarPreco(relatorioCaixa.totais.pix)}</span>
+                                    </div>
+                                </div>
+
+                                {(relatorioCaixa.totalSangrias > 0 || relatorioCaixa.totalSuprimentos > 0) && (
+                                    <div className="border-t border-gray-700 pt-3">
+                                        {relatorioCaixa.totalSangrias > 0 && (
+                                            <div className="flex justify-between py-1 text-red-400">
+                                                <span>➖ Sangrias</span>
+                                                <span>-{formatarPreco(relatorioCaixa.totalSangrias)}</span>
+                                            </div>
+                                        )}
+                                        {relatorioCaixa.totalSuprimentos > 0 && (
+                                            <div className="flex justify-between py-1 text-green-400">
+                                                <span>➕ Suprimentos</span>
+                                                <span>+{formatarPreco(relatorioCaixa.totalSuprimentos)}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <div className="border-t border-gray-700 pt-3">
+                                    <div className="flex justify-between py-2 text-lg">
+                                        <span>📦 Total Vendas ({relatorioCaixa.qtdVendas})</span>
+                                        <span className="font-bold text-[#D4AF37]">{formatarPreco(relatorioCaixa.totalVendas)}</span>
+                                    </div>
+                                    <div className="flex justify-between py-2 text-lg bg-[#D4AF37]/20 px-3 rounded-lg">
+                                        <span className="text-[#D4AF37]">💰 Dinheiro em Caixa</span>
+                                        <span className="font-bold text-[#D4AF37]">{formatarPreco(relatorioCaixa.dinheiroEmCaixa)}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => { setShowFecharCaixa(false); setRelatorioCaixa(null) }}
                                     className="flex-1 py-3 bg-gray-700 rounded-lg"
                                 >
                                     Cancelar
                                 </button>
                                 <button
                                     onClick={fecharCaixa}
-                                    className="flex-1 py-3 bg-red-600 rounded-lg font-bold"
+                                    className="flex-1 py-3 bg-purple-600 rounded-lg font-bold flex items-center justify-center gap-2"
                                 >
-                                    Fechar Caixa
+                                    <Printer size={18} /> Fechar Caixa
                                 </button>
                             </div>
                         </div>
