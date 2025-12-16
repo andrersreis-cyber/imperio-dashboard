@@ -76,7 +76,7 @@ ${itens}
                     phone: dados.telefone,
                     nome_cliente: dados.nome,
                     itens: itensTexto,
-                    valor_total: total,
+                    valor_total: total + (taxaEntrega || 0),
                     taxa_entrega: taxaEntrega || 0,
                     endereco_entrega: dados.endereco,
                     bairro: dados.bairro,

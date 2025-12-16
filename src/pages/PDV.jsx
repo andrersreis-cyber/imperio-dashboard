@@ -12,7 +12,9 @@ import {
     X,
     DollarSign,
     Clock,
-    Package
+    Package,
+    UtensilsCrossed,
+    ChevronDown
 } from 'lucide-react'
 
 export function PDV() {
@@ -27,6 +29,9 @@ export function PDV() {
     const [showPagamento, setShowPagamento] = useState(false)
     const [valorInicial, setValorInicial] = useState('')
     const [desconto, setDesconto] = useState(0)
+    const [mesas, setMesas] = useState([])
+    const [mesaSelecionada, setMesaSelecionada] = useState(null)
+    const [showSeletorMesa, setShowSeletorMesa] = useState(false)
     const searchRef = useRef(null)
 
     useEffect(() => {
@@ -52,6 +57,13 @@ export function PDV() {
             .order('nome')
 
         if (prods) setProdutos(prods)
+
+        // Carregar mesas
+        const { data: mesasData } = await supabase
+            .from('mesas')
+            .select('*')
+            .order('numero')
+        if (mesasData) setMesas(mesasData)
     }
 
     const verificarCaixa = async () => {
@@ -185,10 +197,35 @@ export function PDV() {
             // Imprimir cupom
             imprimirCupom(data, formaPagamento)
 
+            // Se tem mesa selecionada, criar também pedido na tabela pedidos
+            if (mesaSelecionada) {
+                const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
+                await supabase
+                    .from('pedidos')
+                    .insert({
+                        itens: itensTexto,
+                        valor_total: calcularTotal(),
+                        taxa_entrega: 0,
+                        endereco_entrega: `Mesa ${mesaSelecionada.numero}`,
+                        bairro: 'No local',
+                        forma_pagamento: formaPagamento,
+                        observacoes: `MESA ${mesaSelecionada.numero} - PDV #${data.id}`,
+                        status: 'pendente',
+                        modalidade: 'mesa'
+                    })
+
+                // Atualizar status da mesa para ocupada
+                await supabase
+                    .from('mesas')
+                    .update({ status: 'ocupada' })
+                    .eq('id', mesaSelecionada.id)
+            }
+
             // Limpar carrinho
             setCarrinho([])
             setDesconto(0)
             setShowPagamento(false)
+            setMesaSelecionada(null)
         }
     }
 
@@ -340,6 +377,55 @@ ${carrinho.map(item =>
 
             {/* Lado Direito - Carrinho */}
             <div className="w-96 bg-[#1a1a1a] border-l border-gray-800 flex flex-col">
+                {/* Seletor de Mesa */}
+                <div className="p-4 border-b border-gray-800">
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowSeletorMesa(!showSeletorMesa)}
+                            className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${mesaSelecionada
+                                    ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400'
+                                    : 'bg-gray-800 border border-gray-700 text-gray-400'
+                                }`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <UtensilsCrossed size={18} />
+                                {mesaSelecionada ? `Mesa ${mesaSelecionada.numero}` : 'Balcão (sem mesa)'}
+                            </div>
+                            <ChevronDown size={18} className={showSeletorMesa ? 'rotate-180' : ''} />
+                        </button>
+
+                        {showSeletorMesa && (
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-48 overflow-y-auto">
+                                <button
+                                    onClick={() => { setMesaSelecionada(null); setShowSeletorMesa(false); }}
+                                    className={`w-full p-3 text-left hover:bg-gray-700 flex items-center gap-2 ${!mesaSelecionada ? 'bg-gray-700' : ''
+                                        }`}
+                                >
+                                    <Package size={16} />
+                                    Balcão (sem mesa)
+                                </button>
+                                {mesas.map(mesa => (
+                                    <button
+                                        key={mesa.id}
+                                        onClick={() => { setMesaSelecionada(mesa); setShowSeletorMesa(false); }}
+                                        className={`w-full p-3 text-left hover:bg-gray-700 flex items-center justify-between ${mesaSelecionada?.id === mesa.id ? 'bg-purple-500/20 text-purple-400' : ''
+                                            }`}
+                                    >
+                                        <span className="flex items-center gap-2">
+                                            <UtensilsCrossed size={16} />
+                                            Mesa {mesa.numero}
+                                        </span>
+                                        <span className={`text-xs px-2 py-0.5 rounded ${mesa.status === 'livre' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                                            }`}>
+                                            {mesa.status}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
                 <div className="p-4 border-b border-gray-800">
                     <h2 className="text-lg font-bold flex items-center gap-2">
                         🛒 Carrinho

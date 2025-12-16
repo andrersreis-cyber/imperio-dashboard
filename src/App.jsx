@@ -8,6 +8,9 @@ import { Reports } from './pages/Reports'
 import { Login } from './pages/Login'
 import { Cardapio } from './pages/Cardapio'
 import { PDV } from './pages/PDV'
+import { Mesas } from './pages/Mesas'
+import { Garcom } from './pages/Garcom'
+import { Comandas } from './pages/Comandas'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -46,6 +49,9 @@ function App() {
         {/* Rota pública do Cardápio Digital */}
         <Route path="/cardapio" element={<Cardapio />} />
 
+        {/* Rota pública do App do Garçom */}
+        <Route path="/garcom" element={<Garcom />} />
+
         {/* Rotas protegidas do Dashboard */}
         {user ? (
           <Route path="/" element={<Layout />}>
@@ -54,6 +60,8 @@ function App() {
             <Route path="clientes" element={<Clients />} />
             <Route path="relatorios" element={<Reports />} />
             <Route path="pdv" element={<PDV />} />
+            <Route path="mesas" element={<Mesas />} />
+            <Route path="comandas" element={<Comandas />} />
           </Route>
         ) : (
           <Route path="*" element={<Login onLogin={setUser} />} />

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ShoppingBag, Plus, Minus, X, Send, CreditCard, Clock, Gift, MapPin, ChevronRight, Store, User, Check } from 'lucide-react'
 import { Checkout } from '../components/Checkout'
@@ -12,7 +13,8 @@ const LOCALIZACAO = {
     endereco: 'Vitória - ES'
 }
 
-const HORARIOS = {
+// Fallback de horários (caso tabela não exista no banco)
+const HORARIOS_DEFAULT = {
     0: { aberto: true, inicio: '18:20', fim: '22:30' },
     1: { aberto: false },
     2: { aberto: false },
@@ -24,7 +26,8 @@ const HORARIOS = {
 
 const DIAS_SEMANA = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado']
 
-const BAIRROS_ENTREGA = [
+// Fallback de bairros (caso tabela não exista no banco)
+const BAIRROS_DEFAULT = [
     { nome: 'Porto Novo', taxa: 3.00 },
     { nome: 'Presidente Medice', taxa: 3.00 },
     { nome: 'Retiro', taxa: 4.00 },
@@ -48,6 +51,9 @@ const BAIRROS_ENTREGA = [
 ]
 
 export function Cardapio() {
+    const [searchParams] = useSearchParams()
+    const mesaNumero = searchParams.get('mesa') // Lê ?mesa=X da URL
+
     const [categorias, setCategorias] = useState([])
     const [produtos, setProdutos] = useState([])
     const [config, setConfig] = useState({})
@@ -67,6 +73,11 @@ export function Cardapio() {
     const [trocoParaValor, setTrocoParaValor] = useState('')
     const [nomeCliente, setNomeCliente] = useState('')
     const [telefoneCliente, setTelefoneCliente] = useState('')
+    // Se tem mesa na URL, modalidade é 'mesa' automaticamente
+    const [modalidade, setModalidade] = useState(mesaNumero ? 'mesa' : '')
+    // Estados dinâmicos para horários e bairros (carregados do banco)
+    const [horarios, setHorarios] = useState(HORARIOS_DEFAULT)
+    const [bairrosEntrega, setBairrosEntrega] = useState(BAIRROS_DEFAULT)
 
     useEffect(() => {
         fetchData()
@@ -90,6 +101,34 @@ export function Cardapio() {
 
         const { data: prods } = await supabase.from('produtos').select('*').eq('disponivel', true).order('ordem')
         if (prods) setProdutos(prods)
+
+        // Carregar horários do banco (se tabela existir)
+        try {
+            const { data: horariosDB } = await supabase.from('horarios_funcionamento').select('*')
+            if (horariosDB && horariosDB.length > 0) {
+                const horariosObj = {}
+                horariosDB.forEach(h => {
+                    horariosObj[h.dia_semana] = {
+                        aberto: h.aberto,
+                        inicio: h.hora_inicio?.substring(0, 5),
+                        fim: h.hora_fim?.substring(0, 5)
+                    }
+                })
+                setHorarios(horariosObj)
+            }
+        } catch (e) {
+            console.log('Tabela horarios_funcionamento não existe, usando fallback')
+        }
+
+        // Carregar bairros do banco (se tabela existir)
+        try {
+            const { data: bairrosDB } = await supabase.from('bairros_entrega').select('*').eq('ativo', true).order('nome')
+            if (bairrosDB && bairrosDB.length > 0) {
+                setBairrosEntrega(bairrosDB.map(b => ({ nome: b.nome, taxa: parseFloat(b.taxa_entrega) })))
+            }
+        } catch (e) {
+            console.log('Tabela bairros_entrega não existe, usando fallback')
+        }
 
         setLoading(false)
     }
@@ -134,10 +173,13 @@ export function Cardapio() {
             const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
             const totalFinal = calcularTotal() + taxaEntrega
 
-            // Observações com troco se necessário
+            // Observações com troco e/ou mesa
             let observacoes = endereco.complemento || ''
             if (formaPagamento === 'dinheiro' && precisaTroco && trocoParaValor) {
                 observacoes += ` | Troco para R$ ${trocoParaValor}`
+            }
+            if (mesaNumero) {
+                observacoes = `MESA ${mesaNumero}${observacoes ? ' | ' + observacoes : ''}`
             }
 
             const { data: pedido, error } = await supabase
@@ -147,13 +189,13 @@ export function Cardapio() {
                     nome_cliente: nomeCliente,
                     itens: itensTexto,
                     valor_total: totalFinal,
-                    taxa_entrega: taxaEntrega,
-                    endereco_entrega: `${endereco.rua}, ${endereco.numero}`,
-                    bairro: endereco.bairro,
+                    taxa_entrega: modalidade === 'mesa' ? 0 : taxaEntrega,
+                    endereco_entrega: mesaNumero ? `Mesa ${mesaNumero}` : `${endereco.rua}, ${endereco.numero}`,
+                    bairro: mesaNumero ? 'No local' : endereco.bairro,
                     forma_pagamento: formaPagamento,
                     observacoes: observacoes,
                     status: 'pendente',
-                    modalidade: 'delivery'
+                    modalidade: mesaNumero ? 'mesa' : (modalidade || 'delivery')
                 })
                 .select()
                 .single()
@@ -171,6 +213,7 @@ export function Cardapio() {
             setTrocoParaValor('')
             setEndereco({ rua: '', numero: '', bairro: '', complemento: '' })
             setTaxaEntrega(0)
+            setModalidade('')
 
         } catch (error) {
             console.error('Erro ao criar pedido:', error)
@@ -184,13 +227,13 @@ export function Cardapio() {
     const verificarAberto = () => {
         const agora = new Date()
         const diaSemana = agora.getDay()
-        const horario = HORARIOS[diaSemana]
+        const horario = horarios[diaSemana]
 
-        if (!horario.aberto) return { aberto: false, mensagem: 'Fechado hoje' }
+        if (!horario || !horario.aberto) return { aberto: false, mensagem: 'Fechado hoje' }
 
         const horaAtual = agora.getHours() * 60 + agora.getMinutes()
-        const [inicioH, inicioM] = horario.inicio.split(':').map(Number)
-        const [fimH, fimM] = horario.fim.split(':').map(Number)
+        const [inicioH, inicioM] = (horario.inicio || '00:00').split(':').map(Number)
+        const [fimH, fimM] = (horario.fim || '23:59').split(':').map(Number)
 
         if (horaAtual >= inicioH * 60 + inicioM && horaAtual <= fimH * 60 + fimM) {
             return { aberto: true, mensagem: `Aberto até ${horario.fim}` }
@@ -370,24 +413,60 @@ export function Cardapio() {
                                                 <span>{formatarPreco(calcularTotal())}</span>
                                             </div>
                                             <div className="flex justify-between text-gray-600 text-sm">
-                                                <span>Taxa de entrega</span>
-                                                <span>{taxaEntrega > 0 ? formatarPreco(taxaEntrega) : 'Selecione o bairro'}</span>
+                                                <span>
+                                                    {mesaNumero ? `Mesa ${mesaNumero}` :
+                                                        modalidade === 'retirada' ? 'Retirada' :
+                                                            'Taxa de entrega'}
+                                                </span>
+                                                <span className={(mesaNumero || modalidade === 'retirada') ? 'text-green-600 font-semibold' : ''}>
+                                                    {mesaNumero ? 'No local' :
+                                                        modalidade === 'retirada' ? 'Grátis' :
+                                                            taxaEntrega > 0 ? formatarPreco(taxaEntrega) : 'Selecione'}
+                                                </span>
                                             </div>
                                         </div>
 
-                                        {/* Se não tem endereço, mostrar aviso */}
-                                        {!endereco.bairro ? (
+                                        {/* Escolha de Modalidade: Delivery ou Retirada */}
+                                        {!modalidade ? (
+                                            <div className="text-center py-6 px-4 bg-white rounded-2xl border-2 border-dashed border-gray-200">
+                                                <h3 className="font-bold text-gray-900 mb-4">Como deseja receber?</h3>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <button
+                                                        onClick={() => { setModalidade('delivery'); setShowCarrinho(false); setShowEndereco(true); }}
+                                                        className="p-4 bg-blue-50 border-2 border-blue-200 rounded-xl hover:bg-blue-100 transition-colors"
+                                                    >
+                                                        <MapPin className="h-8 w-8 text-blue-500 mx-auto mb-2" />
+                                                        <span className="font-bold text-gray-900 block">Delivery</span>
+                                                        <span className="text-gray-500 text-xs">Receba em casa</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => { setModalidade('retirada'); setTaxaEntrega(0); }}
+                                                        className="p-4 bg-green-50 border-2 border-green-200 rounded-xl hover:bg-green-100 transition-colors"
+                                                    >
+                                                        <Store className="h-8 w-8 text-green-500 mx-auto mb-2" />
+                                                        <span className="font-bold text-gray-900 block">Retirada</span>
+                                                        <span className="text-gray-500 text-xs">Retire no local</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ) : modalidade === 'delivery' && !endereco.bairro ? (
                                             <div className="text-center py-8 px-4 bg-white rounded-2xl border-2 border-dashed border-gray-200">
                                                 <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                                                     <MapPin className="h-8 w-8 text-blue-500" />
                                                 </div>
                                                 <h3 className="font-bold text-gray-900 mb-2">Onde vamos entregar?</h3>
-                                                <p className="text-gray-500 mb-6 text-sm">Informe seu endereço para calcular a taxa de entrega e ver as opções de pagamento.</p>
+                                                <p className="text-gray-500 mb-6 text-sm">Informe seu endereço para calcular a taxa de entrega.</p>
                                                 <button
                                                     onClick={() => { setShowCarrinho(false); setShowEndereco(true); }}
                                                     className="w-full py-3 bg-blue-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-blue-600 transition-colors shadow-lg shadow-blue-200"
                                                 >
                                                     <MapPin size={20} /> Informar Endereço
+                                                </button>
+                                                <button
+                                                    onClick={() => { setModalidade(''); }}
+                                                    className="w-full py-2 mt-2 text-gray-500 text-sm"
+                                                >
+                                                    ← Voltar
                                                 </button>
                                             </div>
                                         ) : (
@@ -555,14 +634,14 @@ export function Cardapio() {
                                     <select
                                         value={endereco.bairro}
                                         onChange={(e) => {
-                                            const bairro = BAIRROS_ENTREGA.find(b => b.nome === e.target.value)
+                                            const bairro = bairrosEntrega.find(b => b.nome === e.target.value)
                                             setEndereco({ ...endereco, bairro: e.target.value })
                                             setTaxaEntrega(bairro ? bairro.taxa : 0)
                                         }}
                                         className="w-full p-3 border border-gray-300 rounded-lg text-gray-900 bg-white"
                                     >
                                         <option value="">Selecione seu bairro</option>
-                                        {BAIRROS_ENTREGA.map(b => (
+                                        {bairrosEntrega.map(b => (
                                             <option key={b.nome} value={b.nome}>{b.nome} - {formatarPreco(b.taxa)}</option>
                                         ))}
                                     </select>
@@ -716,7 +795,7 @@ export function Cardapio() {
                 {showCheckout && (
                     <Checkout
                         carrinho={carrinho}
-                        total={calcularTotal() + taxaEntrega}
+                        total={calcularTotal()}
                         taxaEntrega={taxaEntrega}
                         enderecoEntrega={endereco}
                         config={config}

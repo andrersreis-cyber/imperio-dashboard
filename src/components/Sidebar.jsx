@@ -5,7 +5,9 @@ import {
     Users,
     BarChart3,
     LogOut,
-    ShoppingCart
+    ShoppingCart,
+    QrCode,
+    UtensilsCrossed
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -13,6 +15,8 @@ const menuItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/pdv', icon: ShoppingCart, label: 'PDV' },
     { path: '/pedidos', icon: ClipboardList, label: 'Pedidos' },
+    { path: '/comandas', icon: UtensilsCrossed, label: 'Comandas' },
+    { path: '/mesas', icon: QrCode, label: 'Mesas' },
     { path: '/clientes', icon: Users, label: 'Clientes' },
     { path: '/relatorios', icon: BarChart3, label: 'Relatórios' },
 ]
