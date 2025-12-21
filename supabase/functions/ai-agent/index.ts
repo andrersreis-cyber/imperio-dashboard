@@ -10,71 +10,62 @@ const corsHeaders = {
 }
 
 // System prompt da Imperatriz
-const SYSTEM_PROMPT = `# IDENTIDADE
+const SYSTEM_PROMPT = `Você é Imperatriz, assistente virtual do Império das Porções (restaurante de porções em Cariacica-ES).
 
-Você é a **Imperatriz**, assistente virtual do **Império das Porções**.
+HORÁRIO: Quarta a Domingo, 19h30-23h. Fechado Segunda e Terça.
 
-## REGRA DE OURO
-"Nunca seja mais carinhoso que o cliente. Seja acolhedor, mas profissional."
+## FLUXO DE PEDIDO (siga na ordem):
 
-## TOM POR TIPO DE CLIENTE
-- Cliente DIRETO: Responda objetivamente, sem emojis em excesso
-- Cliente CORDIAL: Seja acolhedor, use 1-2 emojis
-- Cliente CARINHOSO: Espelhe o carinho, use 2-3 emojis
+1. ITENS DO PEDIDO
+   - Quando cliente pedir algo, use buscar_preco_item para obter o preço
+   - Se pedir "porção" sem especificar, pergunte: Mini (R$31), Média (R$65-78) ou Grande (R$84-96)?
+   - Se pedir "suco" sem especificar, pergunte qual sabor (todos R$8)
+   - Anote quantidade e preço de cada item
 
-## IDENTIFICAÇÃO DE GÊNERO
-- MULHER: usar "querida", "minha amiga"
-- HOMEM: usar "querido", "meu amigo"
-- NÃO IDENTIFICADO: usar "olá!", saudações neutras
+2. MODALIDADE
+   - Pergunte: "Será ENTREGA ou RETIRADA no local?"
+   - Se RETIRADA: taxa = R$0, pule para passo 4
+   - Se ENTREGA: continue com passo 3
 
-## EXEMPLOS DE RESPOSTAS
-- Saudação: "Boa tarde! Eu sou a Imperatriz, do Império das Porções. Como posso ajudar?"
-- Coleta: "Perfeito! Para finalizar, preciso de: nome, endereço, bairro, ponto de referência e forma de pagamento."
-- Confirmação: "Pedido confirmado! Entrega em aproximadamente 70 minutos. Obrigada pela preferência! 🍗"
+3. ENDEREÇO (só se entrega)
+   - Pergunte o BAIRRO
+   - Use calcular_taxa_entrega para ver se atendemos e qual a taxa
+   - Se não atendemos, sugira retirada
+   - Peça: rua, número e ponto de referência
 
-## O QUE EVITAR
-- "Meu amor" como saudação padrão
-- Excesso de emojis (máximo 2 por mensagem)
-- Repetir termos carinhosos
+4. NOME DO CLIENTE
+   - Pergunte: "Qual seu nome completo?"
 
-## INFORMAÇÕES DO RESTAURANTE
-- Local: Porto de Santana, Cariacica - ES
-- Horário: Quarta a Domingo, 19h30-23h (último pedido 22h30)
-- Fechado: Segunda e Terça
-- Pagamento: Dinheiro, PIX, Débito, Crédito
-- Especialidade: Porções com maionese caseira especial
+5. FORMA DE PAGAMENTO
+   - Opções: PIX (5% desconto), Dinheiro, Crédito ou Débito
+   - Se dinheiro: "Precisa de troco? Para quanto?"
 
-## DADOS A COLETAR (DELIVERY)
-1. Nome do cliente
-2. Endereço (rua e número)
-3. Bairro
-4. Ponto de referência
-5. Itens do pedido
-6. Forma de pagamento
+6. CONFIRMAR PEDIDO
+   - Mostre resumo COM VALORES REAIS:
+     * Itens: nome e preço de cada
+     * Subtotal dos itens
+     * Taxa de entrega (ou R$0 se retirada)
+     * Total final (com desconto PIX se aplicável)
+   - Peça confirmação: "Confirma este pedido?"
 
-## FERRAMENTAS DISPONÍVEIS
-Você tem acesso às seguintes funções:
-- buscar_cardapio: Lista produtos do cardápio
-- buscar_cliente: Busca dados do cliente pelo telefone
-- salvar_cliente: Salva/atualiza dados do cliente
-- criar_pedido: Cria um novo pedido
-- buscar_ultimo_pedido: Busca o último pedido do cliente
-- pausar_ia: Pausa o atendimento automático (escala para humano)
-- calcular_total: Calcula o total do pedido
+7. CRIAR PEDIDO
+   - Só após cliente confirmar, use criar_pedido
+   - Informe tempo: 50-70 minutos para entrega
 
-## FLUXO DE ATENDIMENTO
-1. Saudar o cliente
-2. Se pedir cardápio, usar buscar_cardapio
-3. Anotar pedido
-4. Coletar dados de entrega
-5. Confirmar pedido (usar criar_pedido)
-6. Informar tempo de entrega (~70 min)
+## BAIRROS E TAXAS:
+Porto Novo R$3 | Presidente Medice R$3 | Porto de Santana R$3 | Del Porto R$3 | Morro do Sesi R$3 | Morada Feliz R$3
+Retiro R$4 | Vila Oasis R$4 | Morro do Meio R$4 | Bairro Aparecida R$4
+Nova Canaã R$5 | Sotema R$5
+Santana R$6 | Tucum R$6 | Boa Vista R$6 | Flexal I R$6 | Itaquari R$6
+Itacibá R$7 | Tabajara R$12 | Campo Grande R$12
 
-## QUANDO ESCALAR PARA HUMANO
-- Alergias alimentares
-- Reclamações
-- Mais de 2 modificações no pedido
-- Cliente insatisfeito`
+## REGRAS IMPORTANTES:
+- SEMPRE use buscar_preco_item antes de confirmar pedido
+- NUNCA invente preços ou mostre "XX" - sempre valores reais
+- Valor mínimo do pedido: R$15 (sem contar taxa)
+- NUNCA peça os itens novamente se o cliente já informou! Consulte o histórico da conversa.
+- Mantenha os itens na memória durante TODO o fluxo até criar o pedido
+- Seja objetivo e profissional`
 
 // Definição das tools
 const tools = [
@@ -82,7 +73,7 @@ const tools = [
         type: 'function',
         function: {
             name: 'buscar_cardapio',
-            description: 'Busca produtos e categorias do cardápio do restaurante',
+            description: 'Busca produtos e categorias do cardápio do restaurante com preços',
             parameters: {
                 type: 'object',
                 properties: {
@@ -91,6 +82,23 @@ const tools = [
                         description: 'Categoria para filtrar (opcional)'
                     }
                 }
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'buscar_preco_item',
+            description: 'Busca o preço de um item específico do cardápio pelo nome',
+            parameters: {
+                type: 'object',
+                properties: {
+                    nome_item: {
+                        type: 'string',
+                        description: 'Nome do item a buscar (ex: "batata frita", "suco")'
+                    }
+                },
+                required: ['nome_item']
             }
         }
     },
@@ -133,20 +141,21 @@ const tools = [
         type: 'function',
         function: {
             name: 'criar_pedido',
-            description: 'Cria um novo pedido no sistema',
+            description: 'Cria um novo pedido no sistema. IMPORTANTE: valor_total deve incluir o preço dos itens (buscados com buscar_preco_item) + taxa de entrega. Valor mínimo: R$15.',
             parameters: {
                 type: 'object',
                 properties: {
                     telefone: { type: 'string' },
-                    itens: { type: 'string', description: 'Descrição dos itens do pedido' },
-                    valor_total: { type: 'number' },
+                    nome_cliente: { type: 'string', description: 'Nome completo do cliente' },
+                    itens: { type: 'string', description: 'Descrição dos itens do pedido com preços (ex: Batata Frita R$18 + Fanta R$6,50)' },
+                    valor_total: { type: 'number', description: 'Valor total = soma dos itens + taxa de entrega. Mínimo R$15.' },
                     taxa_entrega: { type: 'number' },
                     forma_pagamento: { type: 'string' },
                     endereco: { type: 'string' },
                     bairro: { type: 'string' },
                     observacoes: { type: 'string' }
                 },
-                required: ['telefone', 'itens', 'valor_total']
+                required: ['telefone', 'nome_cliente', 'itens', 'valor_total']
             }
         }
     },
@@ -178,6 +187,23 @@ const tools = [
                 required: ['telefone']
             }
         }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'calcular_taxa_entrega',
+            description: 'Verifica se o bairro é atendido e calcula a taxa de entrega',
+            parameters: {
+                type: 'object',
+                properties: {
+                    bairro: {
+                        type: 'string',
+                        description: 'Nome do bairro do cliente'
+                    }
+                },
+                required: ['bairro']
+            }
+        }
     }
 ]
 
@@ -196,19 +222,34 @@ serve(async (req) => {
         const supabase = createClient(supabaseUrl, supabaseKey)
 
         // Buscar dados do cliente
-        const { data: cliente } = await supabase
+        let { data: cliente } = await supabase
             .from('dados_cliente')
             .select('*')
             .eq('telefone', remoteJid)
             .single()
 
-        // Buscar histórico de mensagens (últimas 10)
+        // Se cliente não existe, criar automaticamente
+        if (!cliente) {
+            const { data: novoCliente } = await supabase
+                .from('dados_cliente')
+                .insert({
+                    telefone: remoteJid,
+                    nomewpp: pushName || 'Cliente WhatsApp',
+                    created_at: new Date().toISOString()
+                })
+                .select()
+                .single()
+            cliente = novoCliente
+            console.log('Novo cliente criado:', remoteJid)
+        }
+
+        // Buscar histórico de mensagens (últimas 20 para manter contexto)
         const { data: historico } = await supabase
             .from('whatsapp_messages')
             .select('content, from_me, created_at')
             .eq('remote_jid', remoteJid)
             .order('created_at', { ascending: false })
-            .limit(10)
+            .limit(20)
 
         // Montar mensagens para o OpenAI
         const messages = [
@@ -262,6 +303,8 @@ ${cliente ? `- Endereço: ${cliente.endereco || 'Não informado'}
 
         // Processar tool calls se houver
         if (choice?.message?.tool_calls) {
+            const toolResults: any[] = []
+
             for (const toolCall of choice.message.tool_calls) {
                 const functionName = toolCall.function.name
                 const args = JSON.parse(toolCall.function.arguments)
@@ -272,11 +315,52 @@ ${cliente ? `- Endereço: ${cliente.endereco || 'Não informado'}
 
                 switch (functionName) {
                     case 'buscar_cardapio':
-                        const { data: produtos } = await supabase
-                            .from('produtos')
-                            .select('nome, descricao, preco')
-                            .eq('ativo', true)
-                        toolResult = JSON.stringify(produtos)
+                        // Sempre enviar link do PDF
+                        toolResult = JSON.stringify({
+                            pdf_url: 'https://cxhypcvdijqauaibcgyp.supabase.co/storage/v1/object/public/arquivos/Cardapio_Imperio.pdf',
+                            mensagem: 'O cardápio completo está disponível neste link. Após ver, me diga o que deseja pedir que busco o preço para você!'
+                        })
+                        break
+
+                    case 'buscar_preco_item':
+                        // Buscar preço de um item específico
+                        try {
+                            const nomeItem = (args.nome_item || '').toLowerCase().trim()
+                            if (!nomeItem) {
+                                toolResult = JSON.stringify({
+                                    encontrado: false,
+                                    mensagem: 'Nome do item não informado. Pergunte ao cliente qual item deseja.'
+                                })
+                                break
+                            }
+
+                            const { data: itemEncontrado, error: erroBusca } = await supabase
+                                .from('produtos')
+                                .select('nome, preco, preco_promocional')
+                                .eq('disponivel', true)
+                                .ilike('nome', `%${nomeItem}%`)
+                                .limit(1)
+                                .single()
+
+                            if (erroBusca || !itemEncontrado) {
+                                toolResult = JSON.stringify({
+                                    encontrado: false,
+                                    mensagem: `Não encontrei "${args.nome_item}" no cardápio. Pergunte ao cliente qual item específico deseja.`
+                                })
+                            } else {
+                                toolResult = JSON.stringify({
+                                    encontrado: true,
+                                    nome: itemEncontrado.nome,
+                                    preco: Number(itemEncontrado.preco_promocional || itemEncontrado.preco)
+                                })
+                            }
+                        } catch (e) {
+                            console.error('Erro em buscar_preco_item:', e)
+                            toolResult = JSON.stringify({
+                                encontrado: false,
+                                mensagem: 'Erro ao buscar item. Tente perguntar ao cliente o item específico.'
+                            })
+                        }
                         break
 
                     case 'buscar_cliente':
@@ -302,11 +386,24 @@ ${cliente ? `- Endereço: ${cliente.endereco || 'Não informado'}
                         break
 
                     case 'criar_pedido':
+                        // Validação: valor mínimo (não pode ser só taxa de entrega)
+                        const valorTotal = args.valor_total || 0
+                        const taxaEntregaPedido = args.taxa_entrega || 0
+
+                        if (valorTotal <= taxaEntregaPedido || valorTotal < 15) {
+                            toolResult = JSON.stringify({
+                                sucesso: false,
+                                erro: 'Valor do pedido muito baixo. Verifique se buscou o preço dos itens com buscar_preco_item antes de criar o pedido.'
+                            })
+                            break
+                        }
+
                         const { data: pedido } = await supabase.from('pedidos').insert({
                             phone: args.telefone,
+                            nome_cliente: args.nome_cliente || pushName || 'Cliente WhatsApp',
                             itens: args.itens,
-                            valor_total: args.valor_total,
-                            taxa_entrega: args.taxa_entrega || 0,
+                            valor_total: valorTotal,
+                            taxa_entrega: taxaEntregaPedido,
                             forma_pagamento: args.forma_pagamento,
                             endereco_entrega: args.endereco,
                             bairro: args.bairro,
@@ -341,15 +438,66 @@ ${cliente ? `- Endereço: ${cliente.endereco || 'Não informado'}
                         }, { onConflict: 'telefone' })
                         toolResult = JSON.stringify({ sucesso: true, motivo: args.motivo })
                         break
+
+                    case 'calcular_taxa_entrega':
+                        const bairrosAtendidos = [
+                            { nome: 'Porto Novo', taxa: 3 },
+                            { nome: 'Presidente Medice', taxa: 3 },
+                            { nome: 'Retiro', taxa: 4 },
+                            { nome: 'Santana', taxa: 6 },
+                            { nome: 'Sotema', taxa: 5 },
+                            { nome: 'Tabajara', taxa: 12 },
+                            { nome: 'Tucum', taxa: 6 },
+                            { nome: 'Vila Oasis', taxa: 4 },
+                            { nome: 'Morro do Meio', taxa: 4 },
+                            { nome: 'Morro do Sesi', taxa: 3 },
+                            { nome: 'Nova Canaã', taxa: 5 },
+                            { nome: 'Porto de Santana', taxa: 3 },
+                            { nome: 'Bairro Aparecida', taxa: 4 },
+                            { nome: 'Boa Vista', taxa: 6 },
+                            { nome: 'Campo Grande', taxa: 12 },
+                            { nome: 'Del Porto', taxa: 3 },
+                            { nome: 'Flexal I', taxa: 6 },
+                            { nome: 'Itacibá', taxa: 7 },
+                            { nome: 'Itaquari', taxa: 6 },
+                            { nome: 'Morada Feliz', taxa: 3 }
+                        ]
+                        const bairroNormalizado = args.bairro.toLowerCase().trim()
+                        const bairroEncontrado = bairrosAtendidos.find(b =>
+                            b.nome.toLowerCase() === bairroNormalizado ||
+                            b.nome.toLowerCase().includes(bairroNormalizado) ||
+                            bairroNormalizado.includes(b.nome.toLowerCase())
+                        )
+                        if (bairroEncontrado) {
+                            toolResult = JSON.stringify({
+                                atendido: true,
+                                bairro: bairroEncontrado.nome,
+                                taxa: bairroEncontrado.taxa,
+                                mensagem: `Atendemos ${bairroEncontrado.nome}! Taxa de entrega: R$ ${bairroEncontrado.taxa.toFixed(2)}`
+                            })
+                        } else {
+                            toolResult = JSON.stringify({
+                                atendido: false,
+                                mensagem: 'Infelizmente não atendemos esse bairro no momento. Você pode retirar no local se preferir!'
+                            })
+                        }
+                        break
                 }
 
-                // Segunda chamada para gerar resposta com resultado da tool
-                messages.push(choice.message)
-                messages.push({
+                // Adicionar resultado da tool (uma entrada para cada tool)
+                toolResults.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
                     content: toolResult
                 })
+            }
+
+            // Adicionar mensagem do assistente com tool_calls UMA VEZ (fora do loop)
+            messages.push(choice.message)
+
+            // Adicionar todos os resultados das tools
+            for (const tr of toolResults) {
+                messages.push(tr)
             }
 
             // Nova chamada para gerar resposta final

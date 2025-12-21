@@ -45,7 +45,11 @@ serve(async (req) => {
             data?.message?.imageMessage?.caption ||
             '[mídia]'
         const pushName = data?.pushName || ''
-        const instanceName = body.instance
+        const instanceName = body.instance || body.instanceName || 'avello'
+
+        console.log('Instance name:', instanceName)
+        console.log('Remote JID:', remoteJid)
+        console.log('Content:', content)
 
         if (!remoteJid) {
             return new Response(JSON.stringify({ error: 'remoteJid não encontrado' }), {
@@ -135,7 +139,11 @@ serve(async (req) => {
             const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
             const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
 
-            await fetch(`${evolutionUrl}/message/sendText/${instanceName}`, {
+            console.log('Enviando para Evolution:', `${evolutionUrl}/message/sendText/${instanceName}`)
+            console.log('Número:', remoteJid)
+            console.log('API Key presente:', !!evolutionKey)
+
+            const sendResponse = await fetch(`${evolutionUrl}/message/sendText/${instanceName}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -146,6 +154,9 @@ serve(async (req) => {
                     text: aiResult.response
                 })
             })
+
+            const sendResult = await sendResponse.json()
+            console.log('Resultado do envio:', JSON.stringify(sendResult))
 
             // 7. Salvar resposta no banco
             await supabase.from('whatsapp_messages').insert({

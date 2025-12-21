@@ -35,15 +35,37 @@ export function WhatsApp() {
     const [newMessage, setNewMessage] = useState('')
     const [agentConfig, setAgentConfig] = useState(null)
     const [templates, setTemplates] = useState([])
+    const [apiKeyInput, setApiKeyInput] = useState('')
 
     // Evolution API config
     const EVOLUTION_API_URL = 'https://aulacurso-evolution-api.nljquy.easypanel.host'
-    const INSTANCE_NAME = 'imperio-dashboard'
+    const INSTANCE_NAME = 'avello'
 
     // Carregar dados iniciais
     useEffect(() => {
         loadData()
-    }, [])
+
+        // Realtime subscription para mensagens
+        const messagesChannel = supabase
+            .channel('whatsapp_messages_realtime')
+            .on('postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
+                (payload) => {
+                    console.log('Nova mensagem recebida:', payload)
+                    // Adicionar mensagem se for da conversa selecionada
+                    if (selectedConversation && payload.new.remote_jid === selectedConversation) {
+                        setMessages(prev => [...prev, payload.new])
+                    }
+                    // Recarregar lista de conversas
+                    loadConversations()
+                }
+            )
+            .subscribe()
+
+        return () => {
+            supabase.removeChannel(messagesChannel)
+        }
+    }, [selectedConversation])
 
     const loadData = async () => {
         setLoading(true)
@@ -58,12 +80,21 @@ export function WhatsApp() {
 
     // Carregar instância
     const loadInstance = async () => {
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('whatsapp_instances')
             .select('*')
-            .limit(1)
+            .eq('instance_name', INSTANCE_NAME)
             .single()
-        setInstance(data)
+
+        if (error) {
+            console.log('Erro ao carregar instância:', error)
+            setInstance(null)
+        } else {
+            setInstance(data)
+            if (data?.api_key && !apiKeyInput) {
+                setApiKeyInput(data.api_key)
+            }
+        }
     }
 
     // Carregar conversas
@@ -122,47 +153,135 @@ export function WhatsApp() {
     const conectar = async () => {
         setLoading(true)
         try {
-            // Criar instância na Evolution API
-            const response = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': instance?.api_key || ''
-                },
-                body: JSON.stringify({
-                    instanceName: INSTANCE_NAME,
-                    integration: 'WHATSAPP-BAILEYS'
+            // Buscar API Key do banco
+            const { data: instanceData } = await supabase
+                .from('whatsapp_instances')
+                .select('api_key')
+                .eq('instance_name', INSTANCE_NAME)
+                .single()
+
+            const apiKey = instanceData?.api_key || apiKeyInput
+            if (!apiKey) {
+                alert('Por favor, insira a API Key da Evolution primeiro!')
+                setLoading(false)
+                return
+            }
+
+            // Primeiro verificar status da instância
+            try {
+                const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${INSTANCE_NAME}`, {
+                    headers: { 'apikey': apiKey }
                 })
-            })
-            const result = await response.json()
+                const statusData = await statusRes.json()
+                console.log('Status check:', statusData)
 
-            // Salvar no banco
-            await supabase.from('whatsapp_instances').upsert({
-                instance_name: INSTANCE_NAME,
-                instance_id: result.instance?.instanceId,
-                status: 'connecting'
-            })
+                if (statusData.state === 'open') {
+                    // Já está conectado!
+                    await supabase.from('whatsapp_instances')
+                        .update({ status: 'connected' })
+                        .eq('instance_name', INSTANCE_NAME)
+                    await loadInstance()
+                    alert('WhatsApp já está conectado!')
+                    setLoading(false)
+                    return
+                }
+            } catch (e) {
+                console.log('Instância pode não existir, tentando criar...')
+            }
 
-            await loadInstance()
-            await getQRCode()
+            // Tentar obter QR Code (connect)
+            const connectRes = await fetch(`${EVOLUTION_API_URL}/instance/connect/${INSTANCE_NAME}`, {
+                headers: { 'apikey': apiKey }
+            })
+            const connectData = await connectRes.json()
+            console.log('Connect result:', connectData)
+
+            if (connectData.base64) {
+                await supabase.from('whatsapp_instances')
+                    .update({ qr_code_base64: connectData.base64, status: 'qr_code' })
+                    .eq('instance_name', INSTANCE_NAME)
+                await loadInstance()
+            } else if (connectData.code) {
+                await supabase.from('whatsapp_instances')
+                    .update({ qr_code_base64: `data:image/png;base64,${connectData.code}`, status: 'qr_code' })
+                    .eq('instance_name', INSTANCE_NAME)
+                await loadInstance()
+            } else if (connectRes.status === 404) {
+                // Instância não existe, criar
+                const createRes = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': apiKey
+                    },
+                    body: JSON.stringify({
+                        instanceName: INSTANCE_NAME,
+                        integration: 'WHATSAPP-BAILEYS',
+                        qrcode: true
+                    })
+                })
+                const createData = await createRes.json()
+                console.log('Create result:', createData)
+
+                if (createData.qrcode?.base64) {
+                    await supabase.from('whatsapp_instances')
+                        .update({ qr_code_base64: createData.qrcode.base64, status: 'qr_code' })
+                        .eq('instance_name', INSTANCE_NAME)
+                    await loadInstance()
+                }
+            } else if (connectData.instance?.state === 'open') {
+                // Já está conectado
+                await supabase.from('whatsapp_instances')
+                    .update({ status: 'connected', qr_code_base64: null })
+                    .eq('instance_name', INSTANCE_NAME)
+                await loadInstance()
+                alert('WhatsApp conectado com sucesso!')
+            } else {
+                console.log('Resposta não esperada:', connectData)
+                // Tentar verificar status novamente
+                await checkStatus()
+            }
+
         } catch (error) {
             console.error('Erro ao conectar:', error)
+            alert('Erro ao conectar: ' + error.message)
         }
         setLoading(false)
     }
 
     // Obter QR Code
-    const getQRCode = async () => {
+    const getQRCode = async (apiKeyParam) => {
         try {
+            // Usar a chave passada ou buscar do banco
+            let apiKey = apiKeyParam
+            if (!apiKey) {
+                const { data: instanceData } = await supabase
+                    .from('whatsapp_instances')
+                    .select('api_key')
+                    .eq('instance_name', INSTANCE_NAME)
+                    .single()
+                apiKey = instanceData?.api_key
+            }
+
+            if (!apiKey) return
+
             const response = await fetch(`${EVOLUTION_API_URL}/instance/connect/${INSTANCE_NAME}`, {
-                headers: { 'apikey': instance?.api_key || '' }
+                headers: { 'apikey': apiKey }
             })
             const result = await response.json()
+            console.log('Connect result:', result)
 
             if (result.base64) {
                 await supabase
                     .from('whatsapp_instances')
                     .update({ qr_code_base64: result.base64, status: 'qr_code' })
+                    .eq('instance_name', INSTANCE_NAME)
+                await loadInstance()
+            } else if (result.code) {
+                // QR Code em formato diferente
+                await supabase
+                    .from('whatsapp_instances')
+                    .update({ qr_code_base64: `data:image/png;base64,${result.code}`, status: 'qr_code' })
                     .eq('instance_name', INSTANCE_NAME)
                 await loadInstance()
             }
@@ -174,10 +293,20 @@ export function WhatsApp() {
     // Verificar status
     const checkStatus = async () => {
         try {
+            // Buscar API Key do banco
+            const { data: instanceData } = await supabase
+                .from('whatsapp_instances')
+                .select('api_key')
+                .eq('instance_name', INSTANCE_NAME)
+                .single()
+
+            if (!instanceData?.api_key) return
+
             const response = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${INSTANCE_NAME}`, {
-                headers: { 'apikey': instance?.api_key || '' }
+                headers: { 'apikey': instanceData.api_key }
             })
             const result = await response.json()
+            console.log('Status result:', result)
 
             const newStatus = result.state === 'open' ? 'connected' : 'disconnected'
             await supabase
@@ -193,10 +322,20 @@ export function WhatsApp() {
     // Desconectar
     const desconectar = async () => {
         try {
-            await fetch(`${EVOLUTION_API_URL}/instance/logout/${INSTANCE_NAME}`, {
-                method: 'DELETE',
-                headers: { 'apikey': instance?.api_key || '' }
-            })
+            // Buscar API Key do banco
+            const { data: instanceData } = await supabase
+                .from('whatsapp_instances')
+                .select('api_key')
+                .eq('instance_name', INSTANCE_NAME)
+                .single()
+
+            if (instanceData?.api_key) {
+                await fetch(`${EVOLUTION_API_URL}/instance/logout/${INSTANCE_NAME}`, {
+                    method: 'DELETE',
+                    headers: { 'apikey': instanceData.api_key }
+                })
+            }
+
             await supabase
                 .from('whatsapp_instances')
                 .update({ status: 'disconnected', qr_code_base64: null })
@@ -255,7 +394,11 @@ export function WhatsApp() {
 
     // Formatar hora
     const formatTime = (date) => {
-        return new Date(date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        return new Date(date).toLocaleTimeString('pt-BR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'America/Sao_Paulo'
+        })
     }
 
     // ==================== RENDER ====================
@@ -264,8 +407,8 @@ export function WhatsApp() {
         <button
             onClick={() => setActiveTab(id)}
             className={`flex items-center gap-2 px-4 py-3 rounded-lg transition-colors ${activeTab === id
-                    ? 'bg-gold/20 text-gold'
-                    : 'text-gray-400 hover:bg-gray-800'
+                ? 'bg-gold/20 text-gold'
+                : 'text-gray-400 hover:bg-gray-800'
                 }`}
         >
             {icon}
@@ -357,18 +500,34 @@ export function WhatsApp() {
                 <div className="space-y-4">
                     <div>
                         <label className="block text-sm text-gray-400 mb-2">API Key Evolution</label>
-                        <input
-                            type="password"
-                            placeholder="Sua API Key"
-                            value={instance?.api_key || ''}
-                            onChange={async (e) => {
-                                await supabase
-                                    .from('whatsapp_instances')
-                                    .upsert({ instance_name: INSTANCE_NAME, api_key: e.target.value })
-                                await loadInstance()
-                            }}
-                            className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg"
-                        />
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                placeholder="Sua API Key"
+                                value={apiKeyInput}
+                                onChange={(e) => setApiKeyInput(e.target.value)}
+                                className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg"
+                            />
+                            <button
+                                onClick={async () => {
+                                    if (!apiKeyInput.trim()) {
+                                        alert('Insira uma API Key válida')
+                                        return
+                                    }
+                                    await supabase
+                                        .from('whatsapp_instances')
+                                        .upsert({
+                                            instance_name: INSTANCE_NAME,
+                                            api_key: apiKeyInput
+                                        }, { onConflict: 'instance_name' })
+                                    alert('API Key salva com sucesso!')
+                                    await loadInstance()
+                                }}
+                                className="px-4 py-3 bg-gold text-black rounded-lg hover:opacity-90 font-medium"
+                            >
+                                Salvar
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -428,8 +587,8 @@ export function WhatsApp() {
                                 >
                                     <div
                                         className={`max-w-[70%] px-4 py-2 rounded-lg ${msg.from_me
-                                                ? 'bg-gold text-black'
-                                                : 'bg-gray-800 text-white'
+                                            ? 'bg-gold text-black'
+                                            : 'bg-gray-800 text-white'
                                             }`}
                                     >
                                         <p>{msg.content}</p>
@@ -492,8 +651,8 @@ export function WhatsApp() {
                     <button
                         onClick={toggleAgente}
                         className={`px-4 py-2 rounded-lg ${agentConfig?.ativo
-                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
                             }`}
                     >
                         {agentConfig?.ativo ? 'Desativar' : 'Ativar'}
