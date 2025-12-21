@@ -11,6 +11,7 @@ import { PDV } from './pages/PDV'
 import { Mesas } from './pages/Mesas'
 import { Garcom } from './pages/Garcom'
 import { Comandas } from './pages/Comandas'
+import { WhatsApp } from './pages/WhatsApp'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -62,6 +63,7 @@ function App() {
             <Route path="pdv" element={<PDV />} />
             <Route path="mesas" element={<Mesas />} />
             <Route path="comandas" element={<Comandas />} />
+            <Route path="whatsapp" element={<WhatsApp />} />
           </Route>
         ) : (
           <Route path="*" element={<Login onLogin={setUser} />} />

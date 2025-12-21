@@ -7,7 +7,8 @@ import {
     LogOut,
     ShoppingCart,
     QrCode,
-    UtensilsCrossed
+    UtensilsCrossed,
+    MessageCircle
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -15,6 +16,7 @@ const menuItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/pdv', icon: ShoppingCart, label: 'PDV' },
     { path: '/pedidos', icon: ClipboardList, label: 'Pedidos' },
+    { path: '/whatsapp', icon: MessageCircle, label: 'WhatsApp' },
     { path: '/comandas', icon: UtensilsCrossed, label: 'Comandas' },
     { path: '/mesas', icon: QrCode, label: 'Mesas' },
     { path: '/clientes', icon: Users, label: 'Clientes' },
