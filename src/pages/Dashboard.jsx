@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Header } from '../components/Header'
 import { MetricCard } from '../components/MetricCard'
 import { StatusBadge } from '../components/StatusBadge'
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card'
 import { supabase } from '../lib/supabase'
 import {
     ShoppingBag,
@@ -106,17 +107,17 @@ export function Dashboard() {
     }
 
     return (
-        <div className="min-h-screen">
+        <div className="min-h-screen pb-20">
             <Header title="Dashboard" onRefresh={fetchData} />
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 lg:p-6 space-y-6">
                 {/* Metrics */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
                     <MetricCard
                         title="Pedidos Hoje"
                         value={metrics.totalPedidos}
                         icon={ShoppingBag}
-                        color="gold"
+                        color="red"
                     />
                     <MetricCard
                         title="Faturamento"
@@ -140,69 +141,77 @@ export function Dashboard() {
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Chart */}
-                    <div className="lg:col-span-2 bg-card rounded-xl p-6 border border-gray-800">
-                        <h3 className="text-lg font-semibold mb-4">Pedidos por Hora</h3>
-                        <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <AreaChart data={hourlyData}>
-                                    <defs>
-                                        <linearGradient id="colorPedidos" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#D4AF37" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#D4AF37" stopOpacity={0} />
-                                        </linearGradient>
-                                    </defs>
-                                    <XAxis dataKey="hora" stroke="#6b7280" />
-                                    <YAxis stroke="#6b7280" />
-                                    <Tooltip
-                                        contentStyle={{
-                                            backgroundColor: '#1a1a1a',
-                                            border: '1px solid #333',
-                                            borderRadius: '8px'
-                                        }}
-                                    />
-                                    <Area
-                                        type="monotone"
-                                        dataKey="pedidos"
-                                        stroke="#D4AF37"
-                                        fillOpacity={1}
-                                        fill="url(#colorPedidos)"
-                                    />
-                                </AreaChart>
-                            </ResponsiveContainer>
-                        </div>
-                    </div>
+                    <Card className="lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle>Pedidos por Hora</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="h-64">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={hourlyData}>
+                                        <defs>
+                                            <linearGradient id="colorPedidos" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#E60000" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#E60000" stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <XAxis dataKey="hora" stroke="#6b7280" />
+                                        <YAxis stroke="#6b7280" />
+                                        <Tooltip
+                                            contentStyle={{
+                                                backgroundColor: '#1a1a1a',
+                                                border: '1px solid #333',
+                                                borderRadius: '8px',
+                                                color: '#fff'
+                                            }}
+                                        />
+                                        <Area
+                                            type="monotone"
+                                            dataKey="pedidos"
+                                            stroke="#E60000"
+                                            fillOpacity={1}
+                                            fill="url(#colorPedidos)"
+                                        />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </CardContent>
+                    </Card>
 
                     {/* Recent Orders */}
-                    <div className="bg-card rounded-xl p-6 border border-gray-800">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-semibold">Últimos Pedidos</h3>
-                            <Link to="/pedidos" className="text-gold text-sm hover:underline flex items-center gap-1">
+                    <Card>
+                        <CardHeader className="flex flex-row items-center justify-between pb-2">
+                            <CardTitle>Últimos Pedidos</CardTitle>
+                            <Link to="/pedidos" className="text-gold text-sm hover:text-white transition-colors flex items-center gap-1 font-medium">
                                 Ver todos <ChevronRight size={16} />
                             </Link>
-                        </div>
-
-                        <div className="space-y-3">
-                            {recentOrders.length === 0 ? (
-                                <p className="text-gray-500 text-center py-8">Nenhum pedido hoje</p>
-                            ) : (
-                                recentOrders.map((order) => (
-                                    <div
-                                        key={order.id}
-                                        className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
-                                    >
-                                        <div>
-                                            <p className="font-medium text-sm">#{order.id}</p>
-                                            <p className="text-gray-400 text-xs">{formatTime(order.created_at)}</p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="space-y-3">
+                                {recentOrders.length === 0 ? (
+                                    <p className="text-gray-500 text-center py-8">Nenhum pedido hoje</p>
+                                ) : (
+                                    recentOrders.map((order) => (
+                                        <div
+                                            key={order.id}
+                                            className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-transparent hover:border-gold/20 transition-all"
+                                        >
+                                            <div>
+                                                <p className="font-display text-lg text-white">#{order.id}</p>
+                                                <p className="text-gray-400 text-xs">{formatTime(order.created_at)}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="font-bold text-gold">{formatCurrency(order.valor_total || 0)}</p>
+                                                <div className="mt-1">
+                                                    <StatusBadge status={order.status} />
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="text-right">
-                                            <p className="font-medium text-sm">{formatCurrency(order.valor_total || 0)}</p>
-                                            <StatusBadge status={order.status} />
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
+                                    ))
+                                )}
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             </div>
         </div>
