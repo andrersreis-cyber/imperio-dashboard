@@ -12,6 +12,7 @@ import { Mesas } from './pages/Mesas'
 import { Garcom } from './pages/Garcom'
 import { Comandas } from './pages/Comandas'
 import { WhatsApp } from './pages/WhatsApp'
+import { TestAgent } from './pages/TestAgent'
 import { supabase } from './lib/supabase'
 
 function App() {
@@ -64,6 +65,7 @@ function App() {
             <Route path="mesas" element={<Mesas />} />
             <Route path="comandas" element={<Comandas />} />
             <Route path="whatsapp" element={<WhatsApp />} />
+            <Route path="test-agent" element={<TestAgent />} />
           </Route>
         ) : (
           <Route path="*" element={<Login onLogin={setUser} />} />
