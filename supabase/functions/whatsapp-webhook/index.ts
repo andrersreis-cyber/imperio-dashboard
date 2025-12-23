@@ -40,16 +40,66 @@ serve(async (req) => {
         // Extrair informações da mensagem
         const remoteJid = data?.key?.remoteJid
         const messageType = data?.messageType || 'text'
-        const content = data?.message?.conversation ||
+        let content = data?.message?.conversation ||
             data?.message?.extendedTextMessage?.text ||
             data?.message?.imageMessage?.caption ||
             '[mídia]'
         const pushName = data?.pushName || ''
         const instanceName = body.instance || body.instanceName || 'avello'
+        const messageId = data?.key?.id
 
         console.log('Instance name:', instanceName)
         console.log('Remote JID:', remoteJid)
-        console.log('Content:', content)
+        console.log('Content original:', content)
+        console.log('Message Type:', messageType)
+
+        // Variáveis do Supabase
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+        const supabase = createClient(supabaseUrl, supabaseKey)
+
+        // --- LÓGICA DE TRANSCRIÇÃO DE ÁUDIO ---
+        // Se for áudio, tentamos transcrever antes de salvar e processar
+        let isAudio = false
+        if (messageType === 'audioMessage' || messageType === 'audio') {
+            isAudio = true
+            const audioUrl = data?.message?.audioMessage?.url || data?.message?.url
+
+            if (audioUrl) {
+                console.log('Mensagem de áudio detectada. Iniciando transcrição...')
+                try {
+                    // Chamar função de transcrição
+                    const transcribeResponse = await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${supabaseKey}`
+                        },
+                        body: JSON.stringify({
+                            audioUrl,
+                            messageId
+                        })
+                    })
+
+                    const transcribeResult = await transcribeResponse.json()
+
+                    if (transcribeResult.status === 'success' && transcribeResult.text) {
+                        content = `[ÁUDIO TRANSCRITO]: ${transcribeResult.text}`
+                        console.log('Áudio transcrito com sucesso:', content)
+                    } else {
+                        console.error('Falha na transcrição:', transcribeResult)
+                        content = '[Áudio não pôde ser transcrito]'
+                    }
+                } catch (err) {
+                    console.error('Erro ao chamar transcribe-audio:', err)
+                    content = '[Erro ao processar áudio]'
+                }
+            } else {
+                console.log('URL de áudio não encontrada no payload')
+                content = '[Áudio sem URL]'
+            }
+        }
+        // ---------------------------------------
 
         if (!remoteJid) {
             return new Response(JSON.stringify({ error: 'remoteJid não encontrado' }), {
@@ -58,18 +108,13 @@ serve(async (req) => {
             })
         }
 
-        // Criar cliente Supabase
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-        const supabase = createClient(supabaseUrl, supabaseKey)
-
         // 1. Salvar mensagem recebida
         await supabase.from('whatsapp_messages').insert({
             remote_jid: remoteJid,
-            message_id: data?.key?.id,
+            message_id: messageId,
             from_me: false,
-            message_type: messageType,
-            content: content
+            message_type: messageType, // Mantém o tipo original (audioMessage, etc)
+            content: content // Salva o conteúdo transcrito ou o texto original
         })
 
         // 2. Buscar/criar sessão do agente
@@ -116,6 +161,7 @@ serve(async (req) => {
         }
 
         // 5. Processar com o agente IA
+        // Se for áudio, passamos o conteúdo transcrito. O agente deve saber lidar com isso.
         const aiResponse = await fetch(`${supabaseUrl}/functions/v1/ai-agent`, {
             method: 'POST',
             headers: {
@@ -124,7 +170,7 @@ serve(async (req) => {
             },
             body: JSON.stringify({
                 remoteJid,
-                content,
+                content, // Aqui vai o texto transcrito se for áudio
                 pushName,
                 instanceName,
                 session
