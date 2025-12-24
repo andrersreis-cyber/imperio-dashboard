@@ -28,6 +28,15 @@ export function Dashboard() {
         ticketMedio: 0,
         pendentes: 0,
     })
+    const [metricsDelta, setMetricsDelta] = useState({
+        totalPedidos: 0,
+        faturamento: 0,
+        ticketMedio: 0,
+        pendentes: 0,
+    })
+    const [agentMetrics, setAgentMetrics] = useState({
+        pausados: 0,
+    })
     const [recentOrders, setRecentOrders] = useState([])
     const [hourlyData, setHourlyData] = useState([])
     const [loading, setLoading] = useState(true)
@@ -35,31 +44,72 @@ export function Dashboard() {
     const fetchData = async () => {
         setLoading(true)
 
-        // Buscar pedidos de hoje
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
+        // Datas de referência
+        const startToday = new Date()
+        startToday.setHours(0, 0, 0, 0)
 
-        const { data: pedidos } = await supabase
+        const startYesterday = new Date(startToday)
+        startYesterday.setDate(startYesterday.getDate() - 1)
+
+        const startLast7 = new Date(startToday)
+        startLast7.setDate(startLast7.getDate() - 6) // inclui hoje
+
+        // Pedidos de hoje
+        const { data: pedidosHoje } = await supabase
             .from('pedidos')
             .select('*')
-            .gte('created_at', today.toISOString())
+            .gte('created_at', startToday.toISOString())
             .order('created_at', { ascending: false })
 
-        if (pedidos) {
-            const totalPedidos = pedidos.length
-            const faturamento = pedidos.reduce((sum, p) => sum + (parseFloat(p.valor_total) || 0), 0)
+        // Pedidos de ontem (para delta)
+        const { data: pedidosOntem } = await supabase
+            .from('pedidos')
+            .select('*')
+            .gte('created_at', startYesterday.toISOString())
+            .lt('created_at', startToday.toISOString())
+
+        if (pedidosHoje) {
+            const totalPedidos = pedidosHoje.length
+            const faturamento = pedidosHoje.reduce((sum, p) => sum + (parseFloat(p.valor_total) || 0), 0)
             const ticketMedio = totalPedidos > 0 ? faturamento / totalPedidos : 0
-            const pendentes = pedidos.filter(p => p.status === 'pendente').length
+            const pendentes = pedidosHoje.filter(p => p.status === 'pendente').length
+
+            // Deltas vs. ontem
+            let deltaPedidos = 0
+            let deltaFaturamento = 0
+            let deltaTicket = 0
+            let deltaPendentes = 0
+            if (pedidosOntem && pedidosOntem.length > 0) {
+                const totalOntem = pedidosOntem.length
+                const faturamentoOntem = pedidosOntem.reduce((sum, p) => sum + (parseFloat(p.valor_total) || 0), 0)
+                const ticketOntem = totalOntem > 0 ? faturamentoOntem / totalOntem : 0
+                const pendentesOntem = pedidosOntem.filter(p => p.status === 'pendente').length
+
+                const pct = (hoje, ontem) => {
+                    if (ontem === 0) return hoje > 0 ? 100 : 0
+                    return Math.round(((hoje - ontem) / ontem) * 100)
+                }
+                deltaPedidos = pct(totalPedidos, totalOntem)
+                deltaFaturamento = pct(faturamento, faturamentoOntem)
+                deltaTicket = pct(ticketMedio, ticketOntem)
+                deltaPendentes = pct(pendentes, pendentesOntem)
+            }
 
             setMetrics({ totalPedidos, faturamento, ticketMedio, pendentes })
-            setRecentOrders(pedidos.slice(0, 5))
+            setMetricsDelta({
+                totalPedidos: deltaPedidos,
+                faturamento: deltaFaturamento,
+                ticketMedio: deltaTicket,
+                pendentes: deltaPendentes,
+            })
+            setRecentOrders(pedidosHoje.slice(0, 5))
 
-            // Dados por hora
+            // Dados por hora (0-23)
             const hourCounts = {}
-            for (let i = 19; i <= 23; i++) {
+            for (let i = 0; i <= 23; i++) {
                 hourCounts[i] = 0
             }
-            pedidos.forEach(p => {
+            pedidosHoje.forEach(p => {
                 const hour = new Date(p.created_at).getHours()
                 if (hourCounts[hour] !== undefined) {
                     hourCounts[hour]++
@@ -72,6 +122,14 @@ export function Dashboard() {
                 }))
             )
         }
+
+        // Buscar alertas de agente (clientes com atendimento_ia = 'pause')
+        const { count: pausados } = await supabase
+            .from('clientes')
+            .select('id', { count: 'exact', head: true })
+            .eq('atendimento_ia', 'pause')
+
+        setAgentMetrics({ pausados: pausados || 0 })
 
         setLoading(false)
     }
@@ -95,8 +153,9 @@ export function Dashboard() {
     const formatCurrency = (value) => {
         return new Intl.NumberFormat('pt-BR', {
             style: 'currency',
-            currency: 'BRL'
-        }).format(value)
+            currency: 'BRL',
+            maximumFractionDigits: 2
+        }).format(value || 0)
     }
 
     const formatTime = (dateString) => {
@@ -112,30 +171,41 @@ export function Dashboard() {
 
             <div className="p-4 lg:p-6 space-y-6">
                 {/* Metrics */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4">
                     <MetricCard
                         title="Pedidos Hoje"
                         value={metrics.totalPedidos}
+                        trend={metricsDelta.totalPedidos}
                         icon={ShoppingBag}
                         color="red"
                     />
                     <MetricCard
                         title="Faturamento"
                         value={formatCurrency(metrics.faturamento)}
+                        trend={metricsDelta.faturamento}
                         icon={DollarSign}
                         color="green"
                     />
                     <MetricCard
                         title="Ticket Médio"
                         value={formatCurrency(metrics.ticketMedio)}
+                        trend={metricsDelta.ticketMedio}
                         icon={TrendingUp}
                         color="blue"
                     />
                     <MetricCard
                         title="Pendentes"
                         value={metrics.pendentes}
+                        trend={metricsDelta.pendentes}
                         icon={Clock}
                         color={metrics.pendentes > 0 ? 'red' : 'gold'}
+                    />
+                    <MetricCard
+                        title="Atendimentos IA (pausados)"
+                        value={agentMetrics.pausados}
+                        subtitle="Clientes aguardando humano"
+                        icon={TrendingUp}
+                        color={agentMetrics.pausados > 0 ? 'red' : 'gold'}
                     />
                 </div>
 
