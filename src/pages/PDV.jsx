@@ -458,11 +458,6 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
             {/* Lado Esquerdo - Produtos */}
             <div className="flex-1 flex flex-col">
                 <header className="bg-card border-b border-gray-800 p-4">
-                    {/* DEBUG HEADER - REMOVER DEPOIS */}
-                    <div className="bg-red-600 text-white text-center font-bold p-1 mb-2">
-                        VERSÃO ATUALIZADA - {new Date().toLocaleTimeString()}
-                    </div>
-
                     {/* Banner de status do caixa */}
                     <div className="mb-4 p-3 bg-green-500/20 border border-green-500/50 rounded-lg flex items-center justify-between">
                         <div className="flex items-center gap-2">
