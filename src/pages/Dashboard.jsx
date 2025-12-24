@@ -9,7 +9,9 @@ import {
     DollarSign,
     TrendingUp,
     Clock,
-    ChevronRight
+    ChevronRight,
+    AlertTriangle,
+    UserX
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import {
@@ -31,6 +33,7 @@ export function Dashboard() {
     const [recentOrders, setRecentOrders] = useState([])
     const [hourlyData, setHourlyData] = useState([])
     const [loading, setLoading] = useState(true)
+    const [clientesPausados, setClientesPausados] = useState([])
 
     const fetchData = async () => {
         setLoading(true)
@@ -44,6 +47,17 @@ export function Dashboard() {
             .select('*')
             .gte('created_at', today.toISOString())
             .order('created_at', { ascending: false })
+
+        // Buscar clientes que precisam de atendimento humano
+        const { data: clientes } = await supabase
+            .from('dados_cliente')
+            .select('telefone, nome_completo, nomewpp, updated_at')
+            .eq('atendimento_ia', 'pause')
+            .order('updated_at', { ascending: false })
+
+        if (clientes) {
+            setClientesPausados(clientes)
+        }
 
         if (pedidos) {
             const totalPedidos = pedidos.length
@@ -85,6 +99,9 @@ export function Dashboard() {
             .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, () => {
                 fetchData()
             })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'dados_cliente' }, () => {
+                fetchData()
+            })
             .subscribe()
 
         return () => {
@@ -111,6 +128,54 @@ export function Dashboard() {
             <Header title="Dashboard" onRefresh={fetchData} />
 
             <div className="p-4 lg:p-6 space-y-6">
+                {/* Alerta de Atendimento Humano */}
+                {clientesPausados.length > 0 && (
+                    <Card className="border-red-500 bg-red-500/10">
+                        <CardHeader className="pb-3">
+                            <CardTitle className="flex items-center gap-2 text-red-400">
+                                <AlertTriangle size={20} />
+                                Clientes Aguardando Atendimento Humano ({clientesPausados.length})
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="space-y-2">
+                                {clientesPausados.map((cliente) => {
+                                    const telefoneFormatado = cliente.telefone.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+                                    const nome = cliente.nome_completo || cliente.nomewpp || 'Cliente sem nome'
+                                    const tempoAguardando = new Date() - new Date(cliente.updated_at)
+                                    const minutosAguardando = Math.floor(tempoAguardando / 60000)
+                                    
+                                    return (
+                                        <div
+                                            key={cliente.telefone}
+                                            className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-red-500/30 hover:border-red-500/50 transition-all"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="p-2 bg-red-500/20 rounded-full">
+                                                    <UserX size={18} className="text-red-400" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-white">{nome}</p>
+                                                    <p className="text-gray-400 text-sm">{telefoneFormatado}</p>
+                                                    <p className="text-red-400 text-xs mt-1">
+                                                        Aguardando há {minutosAguardando < 1 ? 'menos de 1 minuto' : `${minutosAguardando} minuto${minutosAguardando > 1 ? 's' : ''}`}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <Link
+                                                to={`/whatsapp?conversation=${encodeURIComponent(cliente.telefone)}`}
+                                                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                                            >
+                                                Atender
+                                            </Link>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
+
                 {/* Metrics */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
                     <MetricCard

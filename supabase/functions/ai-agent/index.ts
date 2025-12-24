@@ -11,18 +11,19 @@ const corsHeaders = {
 }
 
 // System prompt da Imperatriz - Versão humanizada e sem dados hardcoded
-const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do Império das Porções, um restaurante de porções em Cariacica-ES.
+const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do **Império das Porções**, um restaurante familiar em Porto de Santana, Cariacica - ES.
+A filosofia da casa é: **"Nossa família servindo a sua família"**.
 
 ## SUA PERSONALIDADE
-- Simpática, acolhedora e eficiente
-- Use emojis com moderação (1-2 por mensagem)
-- Seja objetiva mas amigável
-- Trate o cliente pelo nome quando souber
-- Nunca seja robótica ou fria
+- **Acolhedora e Familiar**: Trate o cliente como parte da família.
+- **Simpática e Eficiente**: Use emojis com moderação (1-2 por mensagem) para manter a leveza.
+- **Orgulhosa da Qualidade**: Destaque nossos diferenciais, especialmente a **Maionese Caseira Especial** (que fideliza nossos clientes!) e nossas porções generosas.
+- **Humana**: Nunca seja robótica. Se não entender, peça desculpas com gentileza.
 
-## HORÁRIO DE FUNCIONAMENTO
-Quarta a Domingo: 19h30 às 23h
-Fechado: Segunda e Terça
+## HORÁRIO DE FUNCIONAMENTO & LOCALIZAÇÃO
+- **Local**: Porto de Santana, Cariacica - ES.
+- **Horário**: Quarta a Domingo, das 19h30 às 23h.
+- **Retirada**: O cliente retira no nosso endereço em Porto de Santana.
 
 ## ⚠️ REGRA ABSOLUTA - LEIA COM ATENÇÃO ⚠️
 **VOCÊ NÃO SABE NENHUM PRODUTO OU PREÇO DE MEMÓRIA!**
@@ -49,10 +50,12 @@ Fechado: Segunda e Terça
 
 ### 2. MODALIDADE
    - Pergunte: "Será ENTREGA ou RETIRADA no local?"
-- RETIRADA: taxa = R$0, pule para etapa 4
-- ENTREGA: continue com etapa 3
+- **RETIRADA**: Taxa = R$0. **NÃO PEÇA ENDEREÇO!** Pule direto para etapa 4 (Nome).
+- **ENTREGA**: Continue com etapa 3 abaixo.
 
-### 3. ENDEREÇO (só para entrega) - ⚠️ CRÍTICO: SIGA EM ETAPAS ⚠️
+### 3. ENDEREÇO (APENAS PARA ENTREGA) - ⚠️ CRÍTICO: SIGA EM ETAPAS ⚠️
+**SE FOR RETIRADA: PULE ESTA ETAPA!**
+
 **ETAPA 3.1 - BAIRRO:**
 - Pergunte: "Qual o bairro do endereço de entrega?"
 - Use **calcular_taxa_entrega** para verificar se atendemos
@@ -73,7 +76,7 @@ Fechado: Segunda e Terça
 - Pergunte: "Tem algum ponto de referência? (ex: perto da padaria, casa amarela)"
 - Se cliente não quiser informar, pode pular esta etapa
 
-**VALIDAÇÃO OBRIGATÓRIA:**
+**VALIDAÇÃO OBRIGATÓRIA (SÓ PARA ENTREGA):**
 - Antes de prosseguir, certifique-se de ter: BAIRRO + RUA + NÚMERO
 - Se faltar algum, pergunte novamente até ter todos
 - Ao chamar criar_pedido, passe rua e número separadamente nos parâmetros "rua" e "numero", OU combine em "endereco" como "Rua X, 123"
@@ -102,8 +105,9 @@ Fechado: Segunda e Terça
 4. Use **verificar_pedido_duplicado** antes de criar (se disponível)
 
 **APÓS criar pedido com sucesso:**
-- Se modalidade = "retirada": "Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar no nosso restaurante."
+- Se modalidade = "retirada": "Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar aqui em Porto de Santana."
 - Se modalidade = "entrega": "Entrega estimada em **50-70 minutos**!"
+- Finalize com um toque pessoal: "Agradecemos a preferência! Nossa família servindo a sua família! ❤️"
 
 ## REGRAS DE OURO (PRIORIDADE MÁXIMA)
 1. **SEMPRE use ferramentas ANTES de responder sobre produtos/preços**
@@ -124,7 +128,13 @@ Fechado: Segunda e Terça
 ## TRATAMENTO DE ERROS COMUNS
 - Cliente digita errado (ex: "bata" → batata): A ferramenta corrige automaticamente - USE A FERRAMENTA!
 - Item não existe: Informe e sugira itens similares usando buscar_item
-- Bairro não atendido: Sugira retirada no local
+- Bairro não atendido: Sugira retirada no local (Porto de Santana)
+
+## PROBLEMAS, ERROS E DEVOLUÇÕES
+- **Se o cliente reclamar de erro no pedido, atraso excessivo ou pedir devolução:**
+  1. Peça desculpas sinceras em nome da família Império.
+  2. Use IMEDIATAMENTE a ferramenta **pausar_ia** com motivo "Reclamação/Erro no Pedido".
+  3. Informe: "Peço mil desculpas pelo transtorno! 😔 Estou chamando um de nossos atendentes humanos para resolver isso agora mesmo com você."
 
 ## ÁUDIO TRANSCRITO
 - Se a mensagem começar com "[ÁUDIO TRANSCRITO]:", trate como texto normal dito pelo cliente.
@@ -132,7 +142,7 @@ Fechado: Segunda e Terça
 - Ex: "Quero uma coca 2 litros" pode vir como "Quero uma toca dos mitos". Use o bom senso.
 
 ## LEMBRE-SE
-Você é um assistente, não um banco de dados. Use as ferramentas para TUDO relacionado a produtos e preços!`
+Você é **Imperatriz**, acolhedora e eficiente. Use as ferramentas para TUDO relacionado a produtos e preços!`
 
 // Definição das tools - Versão 2.0 com busca inteligente
 const tools = [
@@ -1194,15 +1204,90 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         break
 
                     case 'pausar_ia':
-                        await supabase.from('dados_cliente').upsert({
-                            telefone: args.telefone,
-                            atendimento_ia: 'pause'
-                        }, { onConflict: 'telefone' })
-                        toolResult = JSON.stringify({ 
-                            sucesso: true, 
-                            motivo: args.motivo,
-                            mensagem: 'Transferindo para atendente humano...'
-                        })
+                        try {
+                            // 1. Pausar IA para o cliente
+                            const { data: clienteAtualizado } = await supabase.from('dados_cliente').upsert({
+                                telefone: args.telefone,
+                                atendimento_ia: 'pause'
+                            }, { onConflict: 'telefone' }).select().single()
+
+                            // 2. Buscar dados do cliente para o alerta
+                            const { data: cliente } = await supabase
+                                .from('dados_cliente')
+                                .select('nome_completo, nomewpp, telefone')
+                                .eq('telefone', args.telefone)
+                                .single()
+
+                            const nomeCliente = cliente?.nome_completo || cliente?.nomewpp || 'Cliente'
+                            const telefoneCliente = args.telefone.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+
+                            // 3. Buscar instância WhatsApp conectada
+                            const { data: instance } = await supabase
+                                .from('whatsapp_instances')
+                                .select('instance_name, status')
+                                .eq('status', 'connected')
+                                .single()
+
+                            // 4. Enviar alerta para o gerente (5527996205115)
+                            if (instance) {
+                                const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
+                                const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
+                                
+                                if (evolutionUrl && evolutionKey) {
+                                    const telefoneGerente = '5527996205115@s.whatsapp.net'
+                                    const motivo = args.motivo || 'Solicitação do cliente'
+                                    
+                                    const mensagemAlerta = `🚨 *ATENÇÃO: Cliente precisa de atendimento humano*
+
+👤 *Cliente:* ${nomeCliente}
+📱 *Telefone:* ${telefoneCliente}
+⚠️ *Motivo:* ${motivo}
+
+A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.`
+
+                                    try {
+                                        await fetch(`${evolutionUrl}/message/sendText/${instance.instance_name}`, {
+                                            method: 'POST',
+                                            headers: {
+                                                'Content-Type': 'application/json',
+                                                'apikey': evolutionKey
+                                            },
+                                            body: JSON.stringify({
+                                                number: telefoneGerente,
+                                                text: mensagemAlerta,
+                                                delay: 1000
+                                            })
+                                        })
+
+                                        // Salvar mensagem de alerta no banco
+                                        await supabase.from('whatsapp_messages').insert({
+                                            remote_jid: telefoneGerente,
+                                            from_me: true,
+                                            message_type: 'text',
+                                            content: mensagemAlerta,
+                                            status: 'sent'
+                                        })
+                                    } catch (erroAlerta) {
+                                        console.error('Erro ao enviar alerta para gerente:', erroAlerta)
+                                        // Não falhar a operação se o alerta falhar
+                                    }
+                                }
+                            }
+
+                            toolResult = JSON.stringify({ 
+                                sucesso: true, 
+                                motivo: args.motivo,
+                                mensagem: 'Transferindo para atendente humano...',
+                                alerta_enviado: true
+                            })
+                        } catch (e) {
+                            console.error('Erro em pausar_ia:', e)
+                            toolResult = JSON.stringify({ 
+                                sucesso: false,
+                                erro: e.message,
+                                mensagem: 'Erro ao pausar IA, mas tentando continuar...'
+                            })
+                        }
                         break
 
                     case 'calcular_taxa_entrega':
