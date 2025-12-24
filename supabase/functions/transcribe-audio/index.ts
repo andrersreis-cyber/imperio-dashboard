@@ -50,12 +50,11 @@ serve(async (req) => {
         if ((message || fullData) && instanceName) {
             const messagePayload = fullData || message // Preferir fullData se disponível
             
-            // Lista de endpoints para tentar
+            // Lista de endpoints para tentar - OTIMIZADA PARA EVITAR TIMEOUT
+            // Prioriza getBase64FromMediaMessage que já retorna o binário pronto
             const endpoints = [
-                { path: `/message/downloadMedia/${instanceName}`, name: 'downloadMedia' },
-                { path: `/chat/fetchMedia/${instanceName}`, name: 'fetchMedia' },
                 { path: `/chat/getBase64FromMediaMessage/${instanceName}`, name: 'getBase64FromMediaMessage' },
-                { path: `/message/getMedia/${instanceName}`, name: 'getMedia' },
+                // { path: `/message/downloadMedia/${instanceName}`, name: 'downloadMedia' }, // Redundante e as vezes lento
             ]
 
             for (const endpoint of endpoints) {
@@ -68,51 +67,91 @@ serve(async (req) => {
                         ? JSON.stringify({ message: messagePayload, convertToMp4: false })
                         : JSON.stringify({ message: messagePayload })
 
-                    const response = await fetch(`${evolutionUrl}${endpoint.path}`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'apikey': evolutionKey
-                        },
-                        body
-                    })
+                    // REDUZIDO TIMEOUT PARA 7 SEGUNDOS para não estourar tempo da Edge Function
+                    const controller = new AbortController()
+                    const timeoutId = setTimeout(() => controller.abort(), 7000)
 
-                    const status = response.status
-                    console.log(`[transcribe-audio] ${endpoint.name} status: ${status}`)
+                    try {
+                        const start = Date.now()
+                        const response = await fetch(`${evolutionUrl}${endpoint.path}`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'apikey': evolutionKey
+                            },
+                            body,
+                            signal: controller.signal
+                        })
+                        clearTimeout(timeoutId)
+                        const duration = Date.now() - start
+                        console.log(`[transcribe-audio] ${endpoint.name} levou ${duration}ms. Status: ${response.status}`)
 
-                    if (response.ok) {
-                        const contentType = response.headers.get('content-type') || ''
-                        
-                        if (contentType.startsWith('audio/') || contentType.startsWith('application/octet-stream')) {
-                            audioBlob = await response.blob()
-                            console.log(`[transcribe-audio] ✅ SUCESSO via ${endpoint.name}! Tamanho: ${audioBlob.size}`)
-                            break
-                        } else {
-                            // Tentar como JSON
-                            const jsonData = await response.json()
-                            if (jsonData.base64) {
-                                const binaryString = atob(jsonData.base64)
-                                const bytes = new Uint8Array(binaryString.length)
-                                for (let i = 0; i < binaryString.length; i++) {
-                                    bytes[i] = binaryString.charCodeAt(i)
-                                }
-                                const mimeType = audioUrl?.includes('.mp4') ? 'audio/mp4' : 'audio/ogg'
-                                audioBlob = new Blob([bytes], { type: mimeType })
-                                console.log(`[transcribe-audio] ✅ SUCESSO via ${endpoint.name} (Base64)! Tamanho: ${audioBlob.size}`)
+                        if (response.ok) {
+                            const contentType = response.headers.get('content-type') || ''
+                            
+                            if (contentType.startsWith('audio/') || contentType.startsWith('application/octet-stream')) {
+                                audioBlob = await response.blob()
+                                console.log(`[transcribe-audio] ✅ SUCESSO via ${endpoint.name}! Tamanho: ${audioBlob.size}`)
+                                
+                                // Logar sucesso
+                                await supabase.from('error_logs').insert({
+                                    error_type: 'audio_debug',
+                                    error_message: `Sucesso via ${endpoint.name}`,
+                                    context: JSON.stringify({ size: audioBlob.size, type: audioBlob.type })
+                                })
                                 break
                             } else {
-                                lastError = `${endpoint.name} retornou JSON sem base64: ${JSON.stringify(jsonData).substring(0, 200)}`
-                                console.warn(`[transcribe-audio] ${lastError}`)
+                                // Tentar como JSON
+                                const jsonData = await response.json()
+                                if (jsonData.base64) {
+                                    const binaryString = atob(jsonData.base64)
+                                    const bytes = new Uint8Array(binaryString.length)
+                                    for (let i = 0; i < binaryString.length; i++) {
+                                        bytes[i] = binaryString.charCodeAt(i)
+                                    }
+                                    const mimeType = audioUrl?.includes('.mp4') ? 'audio/mp4' : 'audio/ogg'
+                                    // Converter Uint8Array para Blob
+                                    audioBlob = new Blob([bytes.buffer], { type: mimeType })
+                                    console.log(`[transcribe-audio] ✅ SUCESSO via ${endpoint.name} (Base64)! Tamanho: ${audioBlob.size}`)
+                                    
+                                    // Logar sucesso
+                                    await supabase.from('error_logs').insert({
+                                        error_type: 'audio_debug',
+                                        error_message: `Sucesso via ${endpoint.name} (Base64)`,
+                                        context: JSON.stringify({ size: audioBlob.size, type: audioBlob.type })
+                                    })
+                                    break
+                                } else {
+                                    lastError = `${endpoint.name} retornou JSON sem base64: ${JSON.stringify(jsonData).substring(0, 200)}`
+                                    console.warn(`[transcribe-audio] ${lastError}`)
+                                }
                             }
+                        } else {
+                            const errorText = await response.text()
+                            lastError = `${endpoint.name} falhou (${status}): ${errorText.substring(0, 300)}`
+                            console.error(`[transcribe-audio] ${lastError}`)
+                            
+                            // Logar erro específico deste endpoint
+                            await supabase.from('error_logs').insert({
+                                error_type: 'audio_endpoint_failed',
+                                error_message: lastError,
+                                context: JSON.stringify({ endpoint: endpoint.name, status })
+                            })
                         }
-                    } else {
-                        const errorText = await response.text()
-                        lastError = `${endpoint.name} falhou (${status}): ${errorText.substring(0, 300)}`
-                        console.error(`[transcribe-audio] ${lastError}`)
+                    } catch (fetchError) {
+                        clearTimeout(timeoutId)
+                        throw fetchError
                     }
                 } catch (err) {
                     lastError = `${endpoint.name} exception: ${err.message}`
                     console.error(`[transcribe-audio] ${lastError}`)
+                    
+                    // Logar exception deste endpoint
+                    await supabase.from('error_logs').insert({
+                        error_type: 'audio_endpoint_exception',
+                        error_message: lastError,
+                        context: JSON.stringify({ endpoint: endpoint.name })
+                    })
                 }
             }
         }

@@ -42,6 +42,14 @@ serve(async (req) => {
         // Extrair informações da mensagem
         const remoteJid = data?.key?.remoteJid
         const messageType = data?.messageType || 'text'
+
+        // Ignorar reações (emojis de reação)
+        if (messageType === 'reactionMessage') {
+            return new Response(JSON.stringify({ status: 'ignored', reason: 'reaction_message' }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            })
+        }
+
         let content = data?.message?.conversation ||
             data?.message?.extendedTextMessage?.text ||
             data?.message?.imageMessage?.caption ||
