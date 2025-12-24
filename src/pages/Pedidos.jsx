@@ -270,6 +270,9 @@ export function Pedidos() {
                         >
                             {Icon && <Icon size={16} className="mr-2" />}
                             {label}
+                            <span className="ml-2 bg-black/20 px-2 py-0.5 rounded text-xs">
+                                {key === 'todos' ? pedidos.length : pedidos.filter(p => p.modalidade === key).length}
+                            </span>
                         </Button>
                     ))}
                 </div>
