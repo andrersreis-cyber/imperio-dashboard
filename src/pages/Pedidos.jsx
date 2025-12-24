@@ -162,7 +162,41 @@ export function Pedidos() {
         return passaStatus && passaModalidade
     })
 
+    const formatarItens = (itens) => {
+        if (!itens) return []
+        
+        // Se já for array (formato JSONB do banco)
+        if (Array.isArray(itens)) {
+            return itens.map(item => {
+                if (typeof item === 'string') return item
+                // Formato objeto: { nome: 'X', quantidade: 1 }
+                if (item.nome && item.quantidade) {
+                    return `${item.quantidade}x ${item.nome}`
+                }
+                return JSON.stringify(item)
+            })
+        }
+
+        // Se for string
+        if (typeof itens === 'string') {
+            // Verifica se é JSON string
+            if (itens.startsWith('[') || itens.startsWith('{')) {
+                try {
+                    const parsed = JSON.parse(itens)
+                    return formatarItens(parsed) // Recursivo para tratar o resultado
+                } catch (e) {
+                    // Falha no parse, trata como string normal
+                }
+            }
+            // Remove aspas extras e separa por vírgula
+            return itens.replace(/"/g, '').split(',').map(i => i.trim())
+        }
+        
+        return [String(itens)]
+    }
+
     const handlePrint = (pedido) => {
+        const itensFormatados = formatarItens(pedido.itens)
         const printWindow = window.open('', '', 'width=300,height=600')
         const html = `
             <html>
@@ -180,7 +214,7 @@ export function Pedidos() {
                         <p>Pedido #${pedido.id}</p>
                     </div>
                     <div>
-                        ${(pedido.itens || '').toString().replace(/"/g, '').split(',').map(i => `<p>${i.trim()}</p>`).join('')}
+                        ${itensFormatados.map(i => `<p>${i}</p>`).join('')}
                     </div>
                     <p style="text-align: right; font-weight: bold; margin-top: 10px;">TOTAL: R$ ${Number(pedido.valor_total).toFixed(2)}</p>
                     <script>window.onload = function() { window.print(); window.close(); }</script>
@@ -299,10 +333,10 @@ export function Pedidos() {
                                     <div>
                                         <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-display">Itens do Pedido</p>
                                         <div className="space-y-1 text-sm">
-                                            {(pedido.itens || '').toString().replace(/"/g, '').split(',').map((item, i) => (
+                                            {formatarItens(pedido.itens).map((item, i) => (
                                                 <p key={i} className="flex items-start gap-2">
                                                     <span className="text-gold">•</span>
-                                                    {item.trim()}
+                                                    {item}
                                                 </p>
                                             ))}
                                         </div>
