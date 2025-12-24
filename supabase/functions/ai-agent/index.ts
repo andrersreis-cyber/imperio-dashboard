@@ -11,18 +11,19 @@ const corsHeaders = {
 }
 
 // System prompt da Imperatriz - Versão humanizada e sem dados hardcoded
-const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do Império das Porções, um restaurante de porções em Cariacica-ES.
+const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do **Império das Porções**, um restaurante familiar em Porto de Santana, Cariacica - ES.
+A filosofia da casa é: **"Nossa família servindo a sua família"**.
 
 ## SUA PERSONALIDADE
-- Simpática, acolhedora e eficiente
-- Use emojis com moderação (1-2 por mensagem)
-- Seja objetiva mas amigável
-- Trate o cliente pelo nome quando souber
-- Nunca seja robótica ou fria
+- **Acolhedora e Familiar**: Trate o cliente como parte da família.
+- **Simpática e Eficiente**: Use emojis com moderação (1-2 por mensagem) para manter a leveza.
+- **Orgulhosa da Qualidade**: Destaque nossos diferenciais, especialmente a **Maionese Caseira Especial** (que fideliza nossos clientes!) e nossas porções generosas.
+- **Humana**: Nunca seja robótica. Se não entender, peça desculpas com gentileza.
 
-## HORÁRIO DE FUNCIONAMENTO
-Quarta a Domingo: 19h30 às 23h
-Fechado: Segunda e Terça
+## HORÁRIO DE FUNCIONAMENTO & LOCALIZAÇÃO
+- **Local**: Porto de Santana, Cariacica - ES.
+- **Horário**: Quarta a Domingo, das 19h30 às 23h.
+- **Retirada**: O cliente retira no nosso endereço em Porto de Santana.
 
 ## ⚠️ REGRA ABSOLUTA - LEIA COM ATENÇÃO ⚠️
 **VOCÊ NÃO SABE NENHUM PRODUTO OU PREÇO DE MEMÓRIA!**
@@ -49,30 +50,64 @@ Fechado: Segunda e Terça
 
 ### 2. MODALIDADE
    - Pergunte: "Será ENTREGA ou RETIRADA no local?"
-- RETIRADA: taxa = R$0, pule para etapa 4
-- ENTREGA: continue com etapa 3
+- **RETIRADA**: Taxa = R$0. **NÃO PEÇA ENDEREÇO!** Pule direto para etapa 4 (Nome).
+- **ENTREGA**: Continue com etapa 3 abaixo.
 
-### 3. ENDEREÇO (só para entrega)
-- Pergunte o BAIRRO primeiro
+### 3. ENDEREÇO (APENAS PARA ENTREGA) - ⚠️ CRÍTICO: SIGA EM ETAPAS ⚠️
+**SE FOR RETIRADA: PULE ESTA ETAPA!**
+
+**ETAPA 3.1 - BAIRRO:**
+- Pergunte: "Qual o bairro do endereço de entrega?"
 - Use **calcular_taxa_entrega** para verificar se atendemos
-- Se não atendemos, sugira retirada gentilmente
-   - Peça: rua, número e ponto de referência
+- ⚠️ SE calcular_taxa_entrega retornar ERRO ou "bairro não encontrado": NÃO aceite o pedido! Informe: "Infelizmente não atendemos este bairro. Você pode retirar no local?"
+- Se bairro for atendido, mostre a taxa e continue
+
+**ETAPA 3.2 - RUA:**
+- Pergunte: "Qual a rua do endereço?"
+- Aguarde resposta do cliente
+- Guarde a resposta para usar em criar_pedido
+
+**ETAPA 3.3 - NÚMERO:**
+- Pergunte: "Qual o número?"
+- Aguarde resposta do cliente
+- Guarde a resposta para usar em criar_pedido
+
+**ETAPA 3.4 - PONTO DE REFERÊNCIA (opcional):**
+- Pergunte: "Tem algum ponto de referência? (ex: perto da padaria, casa amarela)"
+- Se cliente não quiser informar, pode pular esta etapa
+
+**VALIDAÇÃO OBRIGATÓRIA (SÓ PARA ENTREGA):**
+- Antes de prosseguir, certifique-se de ter: BAIRRO + RUA + NÚMERO
+- Se faltar algum, pergunte novamente até ter todos
+- Ao chamar criar_pedido, passe rua e número separadamente nos parâmetros "rua" e "numero", OU combine em "endereco" como "Rua X, 123"
 
 ### 4. NOME DO CLIENTE
 - Pergunte: "Qual seu nome completo para o pedido?"
+- Aguarde resposta completa antes de prosseguir
 
 ### 5. FORMA DE PAGAMENTO
 - Opções: PIX (5% desconto), Dinheiro, Cartão Crédito, Cartão Débito
    - Se dinheiro: "Precisa de troco? Para quanto?"
 
-### 6. CONFIRMAR PEDIDO
+### 6. CONFIRMAR PEDIDO - ⚠️ CRÍTICO: CONFIRMAÇÃO EXPLÍCITA ⚠️
 - Use **calcular_total_pedido** para obter o valor correto
 - Mostre resumo completo com valores calculados pelo sistema
    - Peça confirmação: "Confirma este pedido?"
+- ⚠️ NUNCA crie pedido sem confirmação EXPLÍCITA do cliente!
+- Palavras aceitas como confirmação: "sim", "confirma", "pode fechar", "quero", "ok pode fazer", "pode fazer"
+- Se cliente não confirmar explicitamente, pergunte novamente: "Você confirma este pedido?"
 
-### 7. CRIAR PEDIDO
-- Só após confirmação explícita, use **criar_pedido**
-- Informe: "Entrega estimada em 50-70 minutos!"
+### 7. CRIAR PEDIDO - ⚠️ VALIDAÇÕES ANTES DE CRIAR ⚠️
+**ANTES de chamar criar_pedido:**
+1. Verifique se houve confirmação EXPLÍCITA na última mensagem do cliente
+2. Se não houver confirmação explícita, NÃO crie o pedido - peça confirmação novamente
+3. Para ENTREGA: certifique-se de ter bairro + rua + número preenchidos
+4. Use **verificar_pedido_duplicado** antes de criar (se disponível)
+
+**APÓS criar pedido com sucesso:**
+- Se modalidade = "retirada": "Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar aqui em Porto de Santana."
+- Se modalidade = "entrega": "Entrega estimada em **50-70 minutos**!"
+- Finalize com um toque pessoal: "Agradecemos a preferência! Nossa família servindo a sua família! ❤️"
 
 ## REGRAS DE OURO (PRIORIDADE MÁXIMA)
 1. **SEMPRE use ferramentas ANTES de responder sobre produtos/preços**
@@ -93,7 +128,13 @@ Fechado: Segunda e Terça
 ## TRATAMENTO DE ERROS COMUNS
 - Cliente digita errado (ex: "bata" → batata): A ferramenta corrige automaticamente - USE A FERRAMENTA!
 - Item não existe: Informe e sugira itens similares usando buscar_item
-- Bairro não atendido: Sugira retirada no local
+- Bairro não atendido: Sugira retirada no local (Porto de Santana)
+
+## PROBLEMAS, ERROS E DEVOLUÇÕES
+- **Se o cliente reclamar de erro no pedido, atraso excessivo ou pedir devolução:**
+  1. Peça desculpas sinceras em nome da família Império.
+  2. Use IMEDIATAMENTE a ferramenta **pausar_ia** com motivo "Reclamação/Erro no Pedido".
+  3. Informe: "Peço mil desculpas pelo transtorno! 😔 Estou chamando um de nossos atendentes humanos para resolver isso agora mesmo com você."
 
 ## ÁUDIO TRANSCRITO
 - Se a mensagem começar com "[ÁUDIO TRANSCRITO]:", trate como texto normal dito pelo cliente.
@@ -101,7 +142,7 @@ Fechado: Segunda e Terça
 - Ex: "Quero uma coca 2 litros" pode vir como "Quero uma toca dos mitos". Use o bom senso.
 
 ## LEMBRE-SE
-Você é um assistente, não um banco de dados. Use as ferramentas para TUDO relacionado a produtos e preços!`
+Você é **Imperatriz**, acolhedora e eficiente. Use as ferramentas para TUDO relacionado a produtos e preços!`
 
 // Definição das tools - Versão 2.0 com busca inteligente
 const tools = [
@@ -248,7 +289,9 @@ const tools = [
                     },
                     forma_pagamento: { type: 'string' },
                     modalidade: { type: 'string', enum: ['entrega', 'retirada'] },
-                    endereco: { type: 'string' },
+                    endereco: { type: 'string', description: 'Endereço completo: rua e número (ex: "Rua das Flores, 123")' },
+                    rua: { type: 'string', description: 'Nome da rua (opcional, pode estar em endereco)' },
+                    numero: { type: 'string', description: 'Número do endereço (opcional, pode estar em endereco)' },
                     bairro: { type: 'string' },
                     ponto_referencia: { type: 'string' },
                     observacoes: { type: 'string' },
@@ -269,6 +312,31 @@ const tools = [
                     telefone: { type: 'string' }
                 },
                 required: ['telefone']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'verificar_pedido_duplicado',
+            description: '⚠️ OBRIGATÓRIO antes de criar pedido: Verifica se existe pedido similar criado nos últimos 5 minutos para evitar duplicação',
+            parameters: {
+                type: 'object',
+                properties: {
+                    telefone: { type: 'string' },
+                    itens: {
+                        type: 'array',
+                        description: 'Lista de itens do pedido a verificar',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                nome: { type: 'string' },
+                                quantidade: { type: 'number' }
+                            }
+                        }
+                    }
+                },
+                required: ['telefone', 'itens']
             }
         }
     },
@@ -427,11 +495,11 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         try {
                             const termoBusca = (args.termo_busca || '').trim()
                             if (!termoBusca) {
-                                toolResult = JSON.stringify({
+                        toolResult = JSON.stringify({
                                     status: 'erro',
                                     mensagem: 'Termo de busca não informado.'
-                                })
-                                break
+                        })
+                        break
                             }
 
                             // Chamar o novo Motor de Busca Híbrido
@@ -556,7 +624,7 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                         .order('preco', { ascending: true })
 
                                     if (produtos && produtos.length > 0) {
-                                        toolResult = JSON.stringify({
+                                toolResult = JSON.stringify({
                                             status: 'sucesso',
                                             categoria: categoria.nome,
                                             produtos: produtos.map(p => ({
@@ -565,8 +633,8 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                                 descricao: p.descricao || null
                                             })),
                                             instrucao: 'Apresente TODOS os produtos listados acima com seus preços exatos.'
-                                        })
-                                        break
+                                })
+                                break
                                     }
                                 }
                             }
@@ -578,9 +646,9 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                             if (erroCat || !categorias) {
                                 // Fallback: buscar diretamente
                                 const { data: produtos } = await supabase
-                                    .from('produtos')
+                                .from('produtos')
                                     .select('nome, preco, preco_promocional, categoria_id')
-                                    .eq('disponivel', true)
+                                .eq('disponivel', true)
                                     .order('nome')
                                     .limit(30)
 
@@ -721,7 +789,7 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                         subtotal: subtotalItem
                                     })
                                     subtotal += subtotalItem
-                                } else {
+                            } else {
                                     // Fallback: Tenta busca direta se a engine falhar (raro)
                                     const { data: produtoDireto } = await supabase
                                         .from('produtos')
@@ -823,6 +891,85 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         try {
                             const itens = args.itens || []
                             
+                            // VALIDAÇÃO 1: Para entrega, verificar endereço completo
+                            const modalidadeFinal = (args.modalidade || '').toLowerCase().trim()
+                            if (modalidadeFinal === 'entrega') {
+                                // Validar bairro
+                                if (!args.bairro) {
+                            toolResult = JSON.stringify({
+                                sucesso: false,
+                                        erro: 'Bairro não informado',
+                                        mensagem_erro: 'Para entrega, é necessário informar o bairro.',
+                                        instrucao: 'Peça ao cliente o bairro do endereço de entrega.'
+                            })
+                            break
+                        }
+
+                                // Verificar se bairro está na área de atendimento
+                                const { data: bairroCheck } = await supabase
+                                    .rpc('buscar_bairro_taxa', { bairro_busca: args.bairro })
+                                
+                                if (!bairroCheck || bairroCheck.length === 0) {
+                                    toolResult = JSON.stringify({
+                                        sucesso: false,
+                                        erro: 'Bairro não atendido',
+                                        mensagem_erro: `Não atendemos o bairro "${args.bairro}". Você pode optar pela retirada no local (gratuita)!`,
+                                        instrucao: 'NÃO crie pedido de entrega. Sugira retirada no local.'
+                                    })
+                                    break
+                                }
+                                
+                                // Validar endereço (rua e número)
+                                const enderecoCompleto = args.endereco || ''
+                                const rua = args.rua || ''
+                                const numero = args.numero || ''
+                                
+                                // Verificar se tem endereço completo de alguma forma
+                                const temRuaENumeroSeparados = rua && numero
+                                const temEnderecoComNumero = enderecoCompleto && enderecoCompleto.match(/\d+/)
+                                const temEnderecoComVirgula = enderecoCompleto.includes(',')
+                                
+                                if (!temRuaENumeroSeparados && !temEnderecoComNumero && !temEnderecoComVirgula) {
+                                    toolResult = JSON.stringify({
+                                        sucesso: false,
+                                        erro: 'Endereço incompleto',
+                                        mensagem_erro: 'Para entrega, é necessário informar rua e número do endereço.',
+                                        instrucao: 'Peça ao cliente: "Qual a rua?" e depois "Qual o número?" ou peça o endereço completo com número.'
+                                    })
+                                    break
+                                }
+                            }
+                            
+                            // VALIDAÇÃO 2: Verificar duplicação de pedidos
+                            const cincoMinutosAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+                            const { data: pedidosRecentes } = await supabase
+                                .from('pedidos')
+                                .select('id, itens, created_at')
+                                .eq('phone', args.telefone)
+                                .gte('created_at', cincoMinutosAtras)
+                                .order('created_at', { ascending: false })
+                                .limit(3)
+                            
+                            if (pedidosRecentes && pedidosRecentes.length > 0) {
+                                // Verificar se itens são similares
+                                const itensAtuaisStr = JSON.stringify(itens.map((i: any) => ({ nome: i.nome, quantidade: i.quantidade })))
+                                const pedidoSimilar = pedidosRecentes.find((p: any) => {
+                                    const itensPedido = Array.isArray(p.itens) ? p.itens : []
+                                    const itensPedidoStr = JSON.stringify(itensPedido.map((i: any) => ({ nome: i.nome, quantidade: i.quantidade })))
+                                    return itensPedidoStr === itensAtuaisStr
+                                })
+                                
+                                if (pedidoSimilar) {
+                                    toolResult = JSON.stringify({
+                                        sucesso: false,
+                                        erro: 'Pedido duplicado detectado',
+                                        mensagem_erro: `Encontrei um pedido similar criado há pouco tempo (Pedido #${pedidoSimilar.id}). Este é um pedido duplicado?`,
+                                        instrucao: 'Pergunte ao cliente se este é um pedido duplicado ou se ele realmente quer criar um novo pedido.'
+                                    })
+                                    break
+                                }
+                            }
+                            
                             // Validar e calcular total real
                             let subtotal = 0
                             const itensValidados: any[] = []
@@ -902,9 +1049,16 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                 .map(i => `${i.quantidade}x ${i.nome} (R$ ${(i.preco_unitario * i.quantidade).toFixed(2)})`)
                                 .join(' + ')
 
-                            // Validar e sanitizar dados finais
-                            const modalidadeFinal = (args.modalidade || '').toLowerCase().trim()
+                            // Validar e sanitizar dados finais (modalidadeFinal já foi declarada acima)
                             const pagamentoFinal = (args.forma_pagamento || '').toLowerCase().trim()
+                            
+                            // Montar endereço completo (rua + número)
+                            let enderecoCompleto = args.endereco || ''
+                            if (args.rua && args.numero) {
+                                enderecoCompleto = `${args.rua}, ${args.numero}`
+                            } else if (!enderecoCompleto && args.rua) {
+                                enderecoCompleto = args.rua + (args.numero ? `, ${args.numero}` : '')
+                            }
                             
                             // Payload para debug
                             const pedidoPayload = {
@@ -914,9 +1068,9 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                             valor_total: valorTotal,
                                 taxa_entrega: taxaEntrega,
                                 forma_pagamento: pagamentoFinal,
-                            endereco_entrega: args.endereco,
-                            bairro: args.bairro,
-                                ponto_referencia: args.ponto_referencia,
+                            endereco_entrega: enderecoCompleto || (modalidadeFinal === 'entrega' ? 'Endereço não informado' : null),
+                            bairro: args.bairro || null,
+                                ponto_referencia: args.ponto_referencia || null,
                                 observacoes: args.observacoes || (args.troco_para ? `Troco para R$ ${args.troco_para}` : null),
                             status: 'pendente',
                                 modalidade: modalidadeFinal
@@ -936,7 +1090,17 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                 throw new Error(`Erro Banco: ${erroPedido.message} (${erroPedido.details || ''})`)
                             }
 
-                            // ... resto do código ...
+                            // Mensagem de sucesso baseada na modalidade
+                            const mensagemSucesso = modalidadeFinal === 'retirada' 
+                                ? 'Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar no nosso restaurante.'
+                                : 'Entrega estimada em **50-70 minutos**!'
+
+                            toolResult = JSON.stringify({
+                                sucesso: true,
+                                pedido_id: pedido.id,
+                                mensagem_sucesso: mensagemSucesso,
+                                resumo: `Pedido #${pedido.id} criado com sucesso! ${mensagemSucesso}`
+                            })
                         } catch (e) {
                             console.error('Erro em criar_pedido:', e)
                             
@@ -952,6 +1116,64 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                 sucesso: false,
                                 erro_tecnico: e.message,
                                 erro_usuario: 'Houve um erro técnico ao salvar o pedido. Por favor, verifique os dados.'
+                            })
+                        }
+                        break
+
+                    case 'verificar_pedido_duplicado':
+                        try {
+                            const cincoMinutosAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+                            const { data: pedidosRecentes } = await supabase
+                                .from('pedidos')
+                                .select('id, itens, created_at, valor_total')
+                                .eq('phone', args.telefone)
+                                .gte('created_at', cincoMinutosAtras)
+                                .order('created_at', { ascending: false })
+                                .limit(5)
+                            
+                            if (!pedidosRecentes || pedidosRecentes.length === 0) {
+                                toolResult = JSON.stringify({
+                                    duplicado: false,
+                                    mensagem: 'Nenhum pedido recente encontrado. Pode prosseguir.'
+                                })
+                                break
+                            }
+                            
+                            // Comparar itens do pedido atual com pedidos recentes
+                            const itensAtuais = args.itens || []
+                            const itensAtuaisStr = JSON.stringify(itensAtuais.map((i: any) => ({ 
+                                nome: (i.nome || '').toLowerCase().trim(), 
+                                quantidade: i.quantidade || 1 
+                            })).sort((a: any, b: any) => a.nome.localeCompare(b.nome)))
+                            
+                            const pedidoSimilar = pedidosRecentes.find((p: any) => {
+                                const itensPedido = Array.isArray(p.itens) ? p.itens : []
+                                const itensPedidoStr = JSON.stringify(itensPedido.map((i: any) => ({ 
+                                    nome: (typeof i === 'string' ? i : i.nome || '').toLowerCase().trim(), 
+                                    quantidade: typeof i === 'object' ? (i.quantidade || 1) : 1 
+                                })).sort((a: any, b: any) => a.nome.localeCompare(b.nome)))
+                                
+                                return itensPedidoStr === itensAtuaisStr
+                            })
+                            
+                            if (pedidoSimilar) {
+                                toolResult = JSON.stringify({
+                                    duplicado: true,
+                                    pedido_id: pedidoSimilar.id,
+                                    mensagem: `⚠️ ATENÇÃO: Encontrei um pedido similar criado há pouco tempo (Pedido #${pedidoSimilar.id}).`,
+                                    instrucao: 'Pergunte ao cliente se este é um pedido duplicado ou se ele realmente quer criar um novo pedido com os mesmos itens.'
+                                })
+                            } else {
+                                toolResult = JSON.stringify({
+                                    duplicado: false,
+                                    mensagem: 'Nenhum pedido duplicado encontrado. Pode prosseguir.'
+                                })
+                            }
+                        } catch (e) {
+                            console.error('Erro em verificar_pedido_duplicado:', e)
+                            toolResult = JSON.stringify({
+                                duplicado: false,
+                                erro: 'Erro ao verificar duplicação, mas pode prosseguir.'
                             })
                         }
                         break
@@ -982,15 +1204,90 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         break
 
                     case 'pausar_ia':
-                        await supabase.from('dados_cliente').upsert({
-                            telefone: args.telefone,
-                            atendimento_ia: 'pause'
-                        }, { onConflict: 'telefone' })
-                        toolResult = JSON.stringify({ 
-                            sucesso: true, 
-                            motivo: args.motivo,
-                            mensagem: 'Transferindo para atendente humano...'
-                        })
+                        try {
+                            // 1. Pausar IA para o cliente
+                            const { data: clienteAtualizado } = await supabase.from('dados_cliente').upsert({
+                                telefone: args.telefone,
+                                atendimento_ia: 'pause'
+                            }, { onConflict: 'telefone' }).select().single()
+
+                            // 2. Buscar dados do cliente para o alerta
+                            const { data: cliente } = await supabase
+                                .from('dados_cliente')
+                                .select('nome_completo, nomewpp, telefone')
+                                .eq('telefone', args.telefone)
+                                .single()
+
+                            const nomeCliente = cliente?.nome_completo || cliente?.nomewpp || 'Cliente'
+                            const telefoneCliente = args.telefone.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+
+                            // 3. Buscar instância WhatsApp conectada
+                            const { data: instance } = await supabase
+                                .from('whatsapp_instances')
+                                .select('instance_name, status')
+                                .eq('status', 'connected')
+                                .single()
+
+                            // 4. Enviar alerta para o gerente (5527996205115)
+                            if (instance) {
+                                const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
+                                const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
+                                
+                                if (evolutionUrl && evolutionKey) {
+                                    const telefoneGerente = '5527996205115@s.whatsapp.net'
+                                    const motivo = args.motivo || 'Solicitação do cliente'
+                                    
+                                    const mensagemAlerta = `🚨 *ATENÇÃO: Cliente precisa de atendimento humano*
+
+👤 *Cliente:* ${nomeCliente}
+📱 *Telefone:* ${telefoneCliente}
+⚠️ *Motivo:* ${motivo}
+
+A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.`
+
+                                    try {
+                                        await fetch(`${evolutionUrl}/message/sendText/${instance.instance_name}`, {
+                                            method: 'POST',
+                                            headers: {
+                                                'Content-Type': 'application/json',
+                                                'apikey': evolutionKey
+                                            },
+                                            body: JSON.stringify({
+                                                number: telefoneGerente,
+                                                text: mensagemAlerta,
+                                                delay: 1000
+                                            })
+                                        })
+
+                                        // Salvar mensagem de alerta no banco
+                                        await supabase.from('whatsapp_messages').insert({
+                                            remote_jid: telefoneGerente,
+                                            from_me: true,
+                                            message_type: 'text',
+                                            content: mensagemAlerta,
+                                            status: 'sent'
+                                        })
+                                    } catch (erroAlerta) {
+                                        console.error('Erro ao enviar alerta para gerente:', erroAlerta)
+                                        // Não falhar a operação se o alerta falhar
+                                    }
+                                }
+                            }
+
+                            toolResult = JSON.stringify({ 
+                                sucesso: true, 
+                                motivo: args.motivo,
+                                mensagem: 'Transferindo para atendente humano...',
+                                alerta_enviado: true
+                            })
+                        } catch (e) {
+                            console.error('Erro em pausar_ia:', e)
+                            toolResult = JSON.stringify({ 
+                                sucesso: false,
+                                erro: e.message,
+                                mensagem: 'Erro ao pausar IA, mas tentando continuar...'
+                            })
+                        }
                         break
 
                     case 'calcular_taxa_entrega':
@@ -1024,7 +1321,8 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                                 bairro_informado: args.bairro,
                                 mensagem: 'Infelizmente não atendemos esse bairro no momento.',
                                 sugestao: 'Você pode optar pela retirada no local!',
-                                opcao_retirada: 'A retirada é gratuita!'
+                                opcao_retirada: 'A retirada é gratuita!',
+                                instrucao_CRITICA: 'NÃO aceite pedido de entrega para este bairro. Sugira retirada no local ou pergunte se o cliente quer mudar para retirada.'
                             })
                         }
                         break

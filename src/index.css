@@ -14,6 +14,11 @@
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
+/* Classes Tailwind customizadas para cores de fundo */
+.bg-bg-dark { background-color: var(--color-bg-dark); }
+.bg-bg-card { background-color: var(--color-bg-card); }
+.bg-bg-light { background-color: var(--color-bg-light); }
+
 :root {
   /* Mantendo variáveis CSS nativas para compatibilidade */
   --color-gold: #D4AF37;
@@ -65,80 +70,73 @@ h1, h2, h3, h4, h5, h6, .font-display {
 
 /* Animações */
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.animate-fadeIn {
-  animation: fadeIn 0.3s ease-out;
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(230, 0, 0, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(230, 0, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(230, 0, 0, 0); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.animate-fadeIn { animation: fadeIn 0.4s ease-out forwards; }
+.animate-slideUp { animation: slideUp 0.5s ease-out forwards; }
+.animate-scaleIn { animation: scaleIn 0.3s ease-out forwards; }
+.animate-pulse-red { animation: pulse-red 2s infinite; }
+.animate-shake { animation: shake 0.4s ease-in-out; }
+
+/* Stagger delays (para listas) */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
 
 /* Classes utilitárias personalizadas */
-.bg-gold {
-  background-color: var(--color-gold);
-}
+.bg-gold { background-color: var(--color-gold); }
+.text-gold { color: var(--color-gold); }
+.border-gold { border-color: var(--color-gold); }
+.bg-imperio-red { background-color: var(--color-imperio-red); }
+.text-imperio-red { color: var(--color-imperio-red); }
+.border-imperio-red { border-color: var(--color-imperio-red); }
+.bg-card { background-color: var(--color-bg-card); }
+.bg-card-light { background-color: var(--color-bg-light); }
 
-.text-gold {
-  color: var(--color-gold);
-}
-
-.border-gold {
-  border-color: var(--color-gold);
-}
-
-.bg-imperio-red {
-  background-color: var(--color-imperio-red);
-}
-
-.text-imperio-red {
-  color: var(--color-imperio-red);
-}
-
-.border-imperio-red {
-  border-color: var(--color-imperio-red);
-}
-
-.bg-card {
-  background-color: var(--color-bg-card);
-}
-
-.bg-card-light {
-  background-color: var(--color-bg-light);
+/* Glassmorphism utilities */
+.glass {
+  background: rgba(26, 26, 26, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 /* Mobile Responsive */
 @media (max-width: 640px) {
-  .ml-64 {
-    margin-left: 0 !important;
-  }
+  .ml-64 { margin-left: 0 !important; }
 }
 
 /* QR Scanner Styles */
-#qr-reader {
-  width: 100% !important;
-  border: none !important;
-}
-
-#qr-reader video {
-  width: 100% !important;
-  border-radius: 12px;
-}
-
-#qr-reader__scan_region {
-  min-height: 250px;
-}
-
-#qr-reader__dashboard {
-  padding: 10px !important;
-}
-
+#qr-reader { width: 100% !important; border: none !important; }
+#qr-reader video { width: 100% !important; border-radius: 12px; }
+#qr-reader__scan_region { min-height: 250px; }
+#qr-reader__dashboard { padding: 10px !important; }
 #qr-reader__dashboard button {
   background-color: var(--color-gold) !important;
   color: black !important;
@@ -151,18 +149,11 @@ h1, h2, h3, h4, h5, h6, .font-display {
 
 /* Touch-friendly buttons */
 @media (hover: none) {
-  button {
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  button:active {
-    transform: scale(0.98);
-  }
+  button { -webkit-tap-highlight-color: transparent; }
+  button:active { transform: scale(0.98); }
 }
 
 /* Safe area for iOS */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
-  .safe-area-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
+  .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
 }

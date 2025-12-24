@@ -1,5 +1,7 @@
 // Supabase Edge Function: whatsapp-webhook
 // Recebe mensagens da Evolution API e processa com o agente IA
+// v1.1 - Suporte a audio e ptt
+
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -40,6 +42,14 @@ serve(async (req) => {
         // Extrair informações da mensagem
         const remoteJid = data?.key?.remoteJid
         const messageType = data?.messageType || 'text'
+
+        // Ignorar reações (emojis de reação)
+        if (messageType === 'reactionMessage') {
+            return new Response(JSON.stringify({ status: 'ignored', reason: 'reaction_message' }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            })
+        }
+
         let content = data?.message?.conversation ||
             data?.message?.extendedTextMessage?.text ||
             data?.message?.imageMessage?.caption ||
@@ -52,6 +62,7 @@ serve(async (req) => {
         console.log('Remote JID:', remoteJid)
         console.log('Content original:', content)
         console.log('Message Type:', messageType)
+        console.log('Dados da mensagem (debug áudio):', JSON.stringify(data?.message))
 
         // Variáveis do Supabase
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -61,9 +72,11 @@ serve(async (req) => {
         // --- LÓGICA DE TRANSCRIÇÃO DE ÁUDIO ---
         // Se for áudio, tentamos transcrever antes de salvar e processar
         let isAudio = false
-        if (messageType === 'audioMessage' || messageType === 'audio') {
+        if (messageType === 'audioMessage' || messageType === 'audio' || messageType === 'pttMessage') {
             isAudio = true
-            const audioUrl = data?.message?.audioMessage?.url || data?.message?.url
+            const audioUrl = data?.message?.audioMessage?.url || 
+                           data?.message?.pttMessage?.url || 
+                           data?.message?.url
 
             if (audioUrl) {
                 console.log('Mensagem de áudio detectada. Iniciando transcrição...')
@@ -77,6 +90,9 @@ serve(async (req) => {
                         },
                         body: JSON.stringify({
                             audioUrl,
+                            message: data?.message,
+                            fullData: data, // Passar objeto completo para Evolution API
+                            instanceName,
                             messageId
                         })
                     })
@@ -88,11 +104,12 @@ serve(async (req) => {
                         console.log('Áudio transcrito com sucesso:', content)
                     } else {
                         console.error('Falha na transcrição:', transcribeResult)
-                        content = '[Áudio não pôde ser transcrito]'
+                        // DEBUG: Mostrar URL no erro para diagnóstico
+                        content = `[ERRO TRANSCRIÇÃO] Não consegui baixar o áudio. URL: ${audioUrl} | Erro: ${JSON.stringify(transcribeResult)}`
                     }
                 } catch (err) {
                     console.error('Erro ao chamar transcribe-audio:', err)
-                    content = '[Erro ao processar áudio]'
+                    content = `[ERRO TÉCNICO] Falha ao processar áudio. URL: ${audioUrl} | Erro: ${err.message}`
                 }
             } else {
                 console.log('URL de áudio não encontrada no payload')

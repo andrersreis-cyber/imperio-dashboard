@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { supabase } from '../lib/supabase'
 import {
@@ -26,6 +27,7 @@ const TABS = {
 }
 
 export function WhatsApp() {
+    const [searchParams, setSearchParams] = useSearchParams()
     const [activeTab, setActiveTab] = useState(TABS.CONEXAO)
     const [loading, setLoading] = useState(true)
     const [instance, setInstance] = useState(null)
@@ -66,6 +68,21 @@ export function WhatsApp() {
             supabase.removeChannel(messagesChannel)
         }
     }, [selectedConversation])
+
+    // Verificar parâmetro de URL para abrir conversa específica
+    useEffect(() => {
+        const conversationParam = searchParams.get('conversation')
+        if (conversationParam && conversations.length > 0) {
+            // Verificar se a conversa existe
+            const conversationExists = conversations.some(c => c.remote_jid === conversationParam)
+            if (conversationExists) {
+                setActiveTab(TABS.CONVERSAS)
+                loadMessages(conversationParam)
+                // Limpar parâmetro da URL após abrir
+                setSearchParams({})
+            }
+        }
+    }, [conversations, searchParams])
 
     const loadData = async () => {
         setLoading(true)

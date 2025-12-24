@@ -37,9 +37,11 @@ export function Mesas() {
     }
 
     const gerarQRCodeUrl = (mesaNumero) => {
-        const cardapioUrl = `${BASE_URL}/cardapio?mesa=${mesaNumero}`
+        // QR Code aponta para o app do garçom, não para o cardápio
+        // O garçom escaneia o QR e adiciona pedidos na mesa
+        const garcomUrl = `${BASE_URL}/garcom?mesa=${mesaNumero}`
         // Usando API gratuita de QR Code
-        return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(cardapioUrl)}`
+        return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(garcomUrl)}`
     }
 
     const salvarMesa = async () => {
@@ -358,7 +360,10 @@ export function Mesas() {
                             className="w-full max-w-[280px] mx-auto my-4"
                         />
                         <p className="text-gray-600 text-sm mb-4">
-                            Link: {BASE_URL}/cardapio?mesa={qrModal.numero}
+                            Link: {BASE_URL}/garcom?mesa={qrModal.numero}
+                        </p>
+                        <p className="text-gray-500 text-xs mb-4">
+                            O garçom deve escanear este QR Code para adicionar pedidos nesta mesa
                         </p>
                         <div className="flex gap-3">
                             <button
