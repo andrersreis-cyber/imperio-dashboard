@@ -232,7 +232,6 @@ export function Garcom() {
         if (!error) {
             // Calcular total dos itens enviados
             const totalItens = carrinho.reduce((sum, item) => sum + (item.preco * item.quantidade), 0)
-            const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
 
             // Criar pedido na tabela pedidos para aparecer no filtro de Mesa
             const { data: pedidoData, error: pedidoError } = await supabase
@@ -240,7 +239,13 @@ export function Garcom() {
                 .insert({
                     phone: '',
                     nome_cliente: `Mesa ${mesaSelecionada.numero}`,
-                    itens: itensTexto,
+                    // Padronizar itens como JSON (array de objetos) para ficar consistente com delivery/IA
+                    itens: carrinho.map(item => ({
+                        nome: item.nome,
+                        quantidade: item.quantidade,
+                        preco_unitario: Number(item.preco || 0),
+                        observacao: item.observacao || null
+                    })),
                     valor_total: totalItens,
                     taxa_entrega: 0,
                     endereco_entrega: `Mesa ${mesaSelecionada.numero}`,

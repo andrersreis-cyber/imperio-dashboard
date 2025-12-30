@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { ShoppingBag, Plus, Minus, X, Send, CreditCard, Clock, Gift, MapPin, ChevronRight, Store, User, Check, FileText } from 'lucide-react'
-import { Checkout } from '../components/Checkout'
 
 const LOGO_URL = 'https://cxhypcvdijqauaibcgyp.supabase.co/storage/v1/object/public/produtos/logo-imperio.png'
 const PORCAO_URL = 'https://cxhypcvdijqauaibcgyp.supabase.co/storage/v1/object/public/produtos/porcao-destaque.jpg'
@@ -60,7 +59,6 @@ export function Cardapio() {
     const [categoriaAtiva, setCategoriaAtiva] = useState(null)
     const [carrinho, setCarrinho] = useState([])
     const [showCarrinho, setShowCarrinho] = useState(false)
-    const [showCheckout, setShowCheckout] = useState(false)
     const [showInfo, setShowInfo] = useState(false)
     const [showFidelidade, setShowFidelidade] = useState(false)
     const [showEndereco, setShowEndereco] = useState(false)
@@ -191,13 +189,17 @@ export function Cardapio() {
             window.navigator.vibrate(50)
         }
 
+        // Preço efetivo (promoção > preço normal)
+        const precoEfetivo = Number(produto.preco_promocional || produto.preco || 0)
+
         const existe = carrinho.find(item => item.id === produto.id)
         if (existe) {
             setCarrinho(carrinho.map(item =>
                 item.id === produto.id ? { ...item, quantidade: item.quantidade + 1 } : item
             ))
         } else {
-            setCarrinho([...carrinho, { ...produto, quantidade: 1 }])
+            // Salvar o preço efetivo no item do carrinho para evitar divergência no total
+            setCarrinho([...carrinho, { ...produto, preco: precoEfetivo, quantidade: 1 }])
         }
     }
 
@@ -238,6 +240,14 @@ export function Cardapio() {
     const validarTelefone = (telefone) => {
         const apenasNumeros = telefone.replace(/\D/g, '')
         return apenasNumeros.length >= 10 && apenasNumeros.length <= 11
+    }
+
+    const normalizarTelefoneDigits = (telefone) => {
+        const digits = String(telefone || '').replace(/\D/g, '')
+        if (!digits) return ''
+        if (digits.startsWith('55')) return digits
+        if (digits.length === 10 || digits.length === 11) return `55${digits}`
+        return digits
     }
 
     const VALOR_MINIMO_PEDIDO = 20.00 // Valor mínimo de pedido
@@ -281,7 +291,6 @@ export function Cardapio() {
             }
 
             // Criar pedido no banco
-            const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
             const subtotal = calcularTotal()
             const descontoPix = calcularDescontoPix(subtotal)
             const taxa = (modalidade === 'delivery' && endereco.bairro) ? taxaEntrega : 0
@@ -301,9 +310,14 @@ export function Cardapio() {
             const { data: pedido, error } = await supabase
                 .from('pedidos')
                 .insert({
-                    phone: telefoneCliente.replace(/\D/g, ''), // Salvar apenas números
+                    phone: normalizarTelefoneDigits(telefoneCliente), // Salvar apenas números (com 55)
                     nome_cliente: nomeCliente,
-                    itens: itensTexto,
+                    // Padronizar itens como JSON (array de objetos) para ficar igual ao agente IA
+                    itens: carrinho.map(item => ({
+                        nome: item.nome,
+                        quantidade: item.quantidade,
+                        preco_unitario: Number(item.preco || 0)
+                    })),
                     valor_total: totalFinal,
                     taxa_entrega: taxa,
                     endereco_entrega: modalidade === 'delivery' ? `${endereco.rua}, ${endereco.numero}` : 'Retirada no local',
@@ -1142,19 +1156,6 @@ export function Cardapio() {
                             </button>
                         </div>
                     </div>
-                )}
-
-                {/* Checkout */}
-                {showCheckout && (
-                    <Checkout
-                        carrinho={carrinho}
-                        total={calcularTotal()}
-                        taxaEntrega={taxaEntrega}
-                        enderecoEntrega={endereco}
-                        config={config}
-                        onVoltar={() => { setShowCheckout(false); setShowCarrinho(true); }}
-                        onFinalizado={() => { setShowCheckout(false); setCarrinho([]); setEndereco({ rua: '', numero: '', bairro: '', complemento: '' }); setTaxaEntrega(0); }}
-                    />
                 )}
             </div>
         </div>

@@ -23,13 +23,33 @@ export function Checkout({ carrinho, total, taxaEntrega, enderecoEntrega, onVolt
         }).format(valor)
     }
 
+    const normalizarTelefoneDigits = (telefone) => {
+        const digits = String(telefone || '').replace(/\D/g, '')
+        if (!digits) return ''
+        if (digits.startsWith('55')) return digits
+        if (digits.length === 10 || digits.length === 11) return `55${digits}`
+        return digits
+    }
+
+    const calcularDescontoPix = (subtotal) => {
+        if (dados.formaPagamento === 'pix') return subtotal * 0.05
+        return 0
+    }
+
+    const calcularTotalFinal = () => {
+        const subtotal = Number(total || 0)
+        const desconto = calcularDescontoPix(subtotal)
+        const taxa = Number(taxaEntrega || 0)
+        return subtotal - desconto + taxa
+    }
+
     const gerarPixManual = () => {
         // Gerar código PIX estático (simulado)
         // Em produção, usar API do Mercado Pago ou outro gateway
         const chave = config?.pix_chave || '27999999999'
         const nome = config?.nome_restaurante || 'Imperio das Porcoes'
         const cidade = 'Cariacica'
-        const valor = total.toFixed(2)
+        const valor = calcularTotalFinal().toFixed(2)
 
         // Código PIX simplificado para demonstração
         const pixCode = `00020126580014BR.GOV.BCB.PIX0136${chave}5204000053039865406${valor}5802BR5913${nome.substring(0, 13)}6008${cidade}62070503***6304`
@@ -66,22 +86,27 @@ ${itens}
 
         try {
             // Criar pedido no banco
-            const itensTexto = carrinho.map(item =>
-                `${item.quantidade}x ${item.nome}`
-            ).join(', ')
+            const phoneDigits = normalizarTelefoneDigits(dados.telefone)
+            const descontoPix = calcularDescontoPix(Number(total || 0))
+            const totalFinal = calcularTotalFinal()
 
             const { data: pedido, error: pedidoError } = await supabase
                 .from('pedidos')
                 .insert({
-                    phone: dados.telefone,
+                    phone: phoneDigits,
                     nome_cliente: dados.nome,
-                    itens: itensTexto,
-                    valor_total: total + (taxaEntrega || 0),
+                    // Padronizar itens como JSON (array de objetos)
+                    itens: carrinho.map(item => ({
+                        nome: item.nome,
+                        quantidade: item.quantidade,
+                        preco_unitario: Number(item.preco || 0)
+                    })),
+                    valor_total: totalFinal,
                     taxa_entrega: taxaEntrega || 0,
                     endereco_entrega: dados.endereco,
                     bairro: dados.bairro,
                     forma_pagamento: dados.formaPagamento,
-                    observacoes: dados.complemento || '',
+                    observacoes: (descontoPix > 0 ? `Desconto PIX: ${formatarPreco(descontoPix)}${dados.complemento ? ' | ' : ''}` : '') + (dados.complemento || ''),
                     status: 'pendente',
                     modalidade: 'delivery'
                 })
@@ -90,8 +115,13 @@ ${itens}
 
             if (pedidoError) throw pedidoError
 
-            // Enviar notificação WhatsApp para restaurante
-            enviarNotificacaoRestaurante(pedido, itensTexto, dados.endereco, dados.bairro)
+            // Enviar notificação WhatsApp para restaurante (mantém apenas para testes/legado)
+            enviarNotificacaoRestaurante(
+                pedido,
+                carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', '),
+                dados.endereco,
+                dados.bairro
+            )
 
             // Se for PIX, criar registro de pagamento
             if (dados.formaPagamento === 'pix') {
@@ -102,7 +132,7 @@ ${itens}
                     .insert({
                         pedido_id: pedido.id,
                         tipo: 'pix',
-                        valor: total,
+                        valor: totalFinal,
                         status: 'pendente',
                         pix_copia_cola: pixCode
                     })
@@ -178,7 +208,7 @@ ${itens}
                         </div>
                         <div className="border-t border-gray-700 mt-3 pt-3 flex justify-between font-bold">
                             <span>Total</span>
-                            <span className="text-[#D4AF37]">{formatarPreco(total)}</span>
+                            <span className="text-[#D4AF37]">{formatarPreco(calcularTotalFinal())}</span>
                         </div>
                     </div>
 
@@ -282,7 +312,7 @@ ${itens}
                         {loading ? (
                             <><Loader2 size={20} className="animate-spin" /> Processando...</>
                         ) : (
-                            <>Confirmar Pedido - {formatarPreco(total)}</>
+                            <>Confirmar Pedido - {formatarPreco(calcularTotalFinal())}</>
                         )}
                     </button>
                 </main>

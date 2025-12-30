@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { supabase } from '../lib/supabase'
@@ -26,10 +26,16 @@ const TABS = {
     TEMPLATES: 'templates'
 }
 
+import { InstanceSelector } from '../components/whatsapp/InstanceSelector'
+
 export function WhatsApp() {
     const [searchParams, setSearchParams] = useSearchParams()
     const [activeTab, setActiveTab] = useState(TABS.CONEXAO)
     const [loading, setLoading] = useState(true)
+    
+    // Estado da instância selecionada
+    const [instanceName, setInstanceName] = useState(() => localStorage.getItem('selected_instance') || 'avello')
+    
     const [instance, setInstance] = useState(null)
     const [conversations, setConversations] = useState([])
     const [selectedConversation, setSelectedConversation] = useState(null)
@@ -37,21 +43,29 @@ export function WhatsApp() {
     const [newMessage, setNewMessage] = useState('')
     const [agentConfig, setAgentConfig] = useState(null)
     const [templates, setTemplates] = useState([])
-    const [apiKeyInput, setApiKeyInput] = useState('')
 
-    // Evolution API config
-    const EVOLUTION_API_URL = 'https://aulacurso-evolution-api.nljquy.easypanel.host'
-    const INSTANCE_NAME = 'avello'
+    const statusPollRef = useRef(null)
 
-    // Carregar dados iniciais
+    // Carregar dados iniciais quando instanceName mudar
     useEffect(() => {
-        loadData()
+        if (instanceName) {
+            loadData()
+        }
+    }, [instanceName])
 
-        // Realtime subscription para mensagens
+    // Realtime subscription para mensagens
+    useEffect(() => {
+        if (!instanceName) return
+
         const messagesChannel = supabase
-            .channel('whatsapp_messages_realtime')
+            .channel(`whatsapp_messages_realtime_${instanceName}`)
             .on('postgres_changes',
-                { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
+                { 
+                    event: 'INSERT', 
+                    schema: 'public', 
+                    table: 'whatsapp_messages',
+                    filter: `instance_name=eq.${instanceName}`
+                },
                 (payload) => {
                     console.log('Nova mensagem recebida:', payload)
                     // Adicionar mensagem se for da conversa selecionada
@@ -67,7 +81,40 @@ export function WhatsApp() {
         return () => {
             supabase.removeChannel(messagesChannel)
         }
-    }, [selectedConversation])
+    }, [instanceName, selectedConversation])
+
+    // Poll de status (para refletir conexão mesmo sem webhook connection.update)
+    useEffect(() => {
+        const shouldPoll =
+            activeTab === TABS.CONEXAO &&
+            !!instance &&
+            instance?.status !== 'connected' &&
+            (instance?.status === 'qr_code' || !!instance?.qr_code_base64)
+
+        const clearPoll = () => {
+            if (statusPollRef.current) {
+                clearInterval(statusPollRef.current)
+                statusPollRef.current = null
+            }
+        }
+
+        if (!shouldPoll) {
+            clearPoll()
+            return () => clearPoll()
+        }
+
+        // Evitar duplicar intervalos
+        if (statusPollRef.current) return () => clearPoll()
+
+        // Checar rápido ao entrar no estado "aguardando QR"
+        checkStatus()
+
+        statusPollRef.current = setInterval(() => {
+            checkStatus()
+        }, 3500)
+
+        return () => clearPoll()
+    }, [activeTab, instance?.status, instance?.qr_code_base64])
 
     // Verificar parâmetro de URL para abrir conversa específica
     useEffect(() => {
@@ -97,21 +144,17 @@ export function WhatsApp() {
 
     // Carregar instância
     const loadInstance = async () => {
-        const { data, error } = await supabase
-            .from('whatsapp_instances')
-            .select('*')
-            .eq('instance_name', INSTANCE_NAME)
-            .single()
-
-        if (error) {
-            console.log('Erro ao carregar instância:', error)
+        const res = await supabase.functions.invoke('whatsapp-connect', {
+            body: { action: 'get', instanceName }
+        })
+        if (res.error) {
+            console.log('Erro ao carregar instância (Edge):', res.error)
             setInstance(null)
-        } else {
-            setInstance(data)
-            if (data?.api_key && !apiKeyInput) {
-                setApiKeyInput(data.api_key)
-            }
+            return
         }
+
+        const row = res.data?.instance || null
+        setInstance(row)
     }
 
     // Carregar conversas
@@ -119,9 +162,11 @@ export function WhatsApp() {
         const { data } = await supabase
             .from('whatsapp_messages')
             .select('remote_jid, content, from_me, created_at')
+            .eq('instance_name', instanceName)
             .order('created_at', { ascending: false })
 
         // Agrupar por remote_jid
+
         const grouped = {}
         data?.forEach(msg => {
             if (!grouped[msg.remote_jid]) {
@@ -161,6 +206,7 @@ export function WhatsApp() {
         const { data } = await supabase
             .from('whatsapp_messages')
             .select('*')
+            .eq('instance_name', instanceName)
             .eq('remote_jid', remoteJid)
             .order('created_at', { ascending: true })
         setMessages(data || [])
@@ -170,95 +216,69 @@ export function WhatsApp() {
     const conectar = async () => {
         setLoading(true)
         try {
-            // Buscar API Key do banco
-            const { data: instanceData } = await supabase
-                .from('whatsapp_instances')
-                .select('api_key')
-                .eq('instance_name', INSTANCE_NAME)
-                .single()
+            // 0) Garantir webhook/instância (best-effort). Em alguns setups, "create" é idempotente e reconfigura webhook.
+            const createRes = await supabase.functions.invoke('whatsapp-connect', {
+                body: { action: 'create', instanceName }
+            })
+            if (createRes.error) {
+                console.warn('Create (Edge) falhou (pode ser normal se já existir):', createRes.error)
+            }
 
-            const apiKey = instanceData?.api_key || apiKeyInput
-            if (!apiKey) {
-                alert('Por favor, insira a API Key da Evolution primeiro!')
+            // 1) Verificar status via Edge Function (server-side)
+            const statusRes = await supabase.functions.invoke('whatsapp-connect', {
+                body: { action: 'status', instanceName }
+            })
+
+            if (statusRes.error) {
+                console.error('Erro status (Edge):', statusRes.error)
+            } else if (statusRes.data?.connected) {
+                await loadInstance()
+                alert('WhatsApp já está conectado!')
                 setLoading(false)
                 return
             }
 
-            // Primeiro verificar status da instância
-            try {
-                const statusRes = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${INSTANCE_NAME}`, {
-                    headers: { 'apikey': apiKey }
-                })
-                const statusData = await statusRes.json()
-                console.log('Status check:', statusData)
+            // 2) Tentar obter QR Code via Edge Function
+            let connectRes = await supabase.functions.invoke('whatsapp-connect', {
+                body: { action: 'connect', instanceName }
+            })
 
-                if (statusData.state === 'open') {
-                    // Já está conectado!
-                    await supabase.from('whatsapp_instances')
-                        .update({ status: 'connected' })
-                        .eq('instance_name', INSTANCE_NAME)
-                    await loadInstance()
-                    alert('WhatsApp já está conectado!')
+            if (connectRes.error) {
+                console.error('Erro connect (Edge):', connectRes.error)
+                // Tentar criar a instância (para garantir webhook) e tentar novamente
+                const createRes = await supabase.functions.invoke('whatsapp-connect', {
+                    body: { action: 'create', instanceName }
+                })
+                if (createRes.error) {
+                    console.error('Erro create (Edge):', createRes.error)
+                    alert('Erro ao conectar. Verifique a Evolution API (URL/API KEY) no servidor.')
                     setLoading(false)
                     return
                 }
-            } catch (e) {
-                console.log('Instância pode não existir, tentando criar...')
-            }
-
-            // Tentar obter QR Code (connect)
-            const connectRes = await fetch(`${EVOLUTION_API_URL}/instance/connect/${INSTANCE_NAME}`, {
-                headers: { 'apikey': apiKey }
-            })
-            const connectData = await connectRes.json()
-            console.log('Connect result:', connectData)
-
-            if (connectData.base64) {
-                await supabase.from('whatsapp_instances')
-                    .update({ qr_code_base64: connectData.base64, status: 'qr_code' })
-                    .eq('instance_name', INSTANCE_NAME)
-                await loadInstance()
-            } else if (connectData.code) {
-                await supabase.from('whatsapp_instances')
-                    .update({ qr_code_base64: `data:image/png;base64,${connectData.code}`, status: 'qr_code' })
-                    .eq('instance_name', INSTANCE_NAME)
-                await loadInstance()
-            } else if (connectRes.status === 404) {
-                // Instância não existe, criar
-                const createRes = await fetch(`${EVOLUTION_API_URL}/instance/create`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': apiKey
-                    },
-                    body: JSON.stringify({
-                        instanceName: INSTANCE_NAME,
-                        integration: 'WHATSAPP-BAILEYS',
-                        qrcode: true
-                    })
+                connectRes = await supabase.functions.invoke('whatsapp-connect', {
+                    body: { action: 'connect', instanceName }
                 })
-                const createData = await createRes.json()
-                console.log('Create result:', createData)
-
-                if (createData.qrcode?.base64) {
-                    await supabase.from('whatsapp_instances')
-                        .update({ qr_code_base64: createData.qrcode.base64, status: 'qr_code' })
-                        .eq('instance_name', INSTANCE_NAME)
-                    await loadInstance()
+                if (connectRes.error) {
+                    console.error('Erro connect após create (Edge):', connectRes.error)
+                    alert('Não consegui gerar o QR. Verifique se a instância existe na Evolution e se a API Key está correta.')
                 }
-            } else if (connectData.instance?.state === 'open') {
-                // Já está conectado
-                await supabase.from('whatsapp_instances')
-                    .update({ status: 'connected', qr_code_base64: null })
-                    .eq('instance_name', INSTANCE_NAME)
-                await loadInstance()
-                alert('WhatsApp conectado com sucesso!')
-            } else {
-                console.log('Resposta não esperada:', connectData)
-                // Tentar verificar status novamente
-                await checkStatus()
             }
 
+            // Se a função devolveu o QR, refletir imediatamente na UI
+            const qr = connectRes?.data?.qr_code_base64
+            if (qr) {
+                setInstance(prev => ({ ...(prev || {}), instance_name: instanceName, status: 'qr_code', qr_code_base64: qr }))
+            } else {
+                // Caso não devolva, mostrar erro com debug básico (sem expor chaves)
+                if (connectRes?.data?.error) {
+                    console.warn('Falha ao obter QR (Edge):', connectRes.data)
+                    alert(connectRes.data.error)
+                } else {
+                    console.log('QR não retornou no payload; tentando recarregar do banco...')
+                }
+            }
+
+            await loadInstance()
         } catch (error) {
             console.error('Erro ao conectar:', error)
             alert('Erro ao conectar: ' + error.message)
@@ -266,70 +286,25 @@ export function WhatsApp() {
         setLoading(false)
     }
 
-    // Obter QR Code
-    const getQRCode = async (apiKeyParam) => {
-        try {
-            // Usar a chave passada ou buscar do banco
-            let apiKey = apiKeyParam
-            if (!apiKey) {
-                const { data: instanceData } = await supabase
-                    .from('whatsapp_instances')
-                    .select('api_key')
-                    .eq('instance_name', INSTANCE_NAME)
-                    .single()
-                apiKey = instanceData?.api_key
-            }
-
-            if (!apiKey) return
-
-            const response = await fetch(`${EVOLUTION_API_URL}/instance/connect/${INSTANCE_NAME}`, {
-                headers: { 'apikey': apiKey }
-            })
-            const result = await response.json()
-            console.log('Connect result:', result)
-
-            if (result.base64) {
-                await supabase
-                    .from('whatsapp_instances')
-                    .update({ qr_code_base64: result.base64, status: 'qr_code' })
-                    .eq('instance_name', INSTANCE_NAME)
-                await loadInstance()
-            } else if (result.code) {
-                // QR Code em formato diferente
-                await supabase
-                    .from('whatsapp_instances')
-                    .update({ qr_code_base64: `data:image/png;base64,${result.code}`, status: 'qr_code' })
-                    .eq('instance_name', INSTANCE_NAME)
-                await loadInstance()
-            }
-        } catch (error) {
-            console.error('Erro ao obter QR:', error)
-        }
-    }
-
     // Verificar status
     const checkStatus = async () => {
         try {
-            // Buscar API Key do banco
-            const { data: instanceData } = await supabase
-                .from('whatsapp_instances')
-                .select('api_key')
-                .eq('instance_name', INSTANCE_NAME)
-                .single()
-
-            if (!instanceData?.api_key) return
-
-            const response = await fetch(`${EVOLUTION_API_URL}/instance/connectionState/${INSTANCE_NAME}`, {
-                headers: { 'apikey': instanceData.api_key }
+            const res = await supabase.functions.invoke('whatsapp-connect', {
+                body: { action: 'status', instanceName }
             })
-            const result = await response.json()
-            console.log('Status result:', result)
+            if (res.error) {
+                console.error('Erro ao verificar status (Edge):', res.error)
+                return
+            }
 
-            const newStatus = result.state === 'open' ? 'connected' : 'disconnected'
-            await supabase
-                .from('whatsapp_instances')
-                .update({ status: newStatus })
-                .eq('instance_name', INSTANCE_NAME)
+            // Debug útil no console (sem PII)
+            console.log('Status Evolution (Edge):', res.data)
+
+            // Aplicar status na UI imediatamente (evita piscar / depender do banco)
+            if (res.data?.status) {
+                setInstance(prev => ({ ...(prev || {}), instance_name: instanceName, status: res.data.status }))
+            }
+
             await loadInstance()
         } catch (error) {
             console.error('Erro ao verificar status:', error)
@@ -339,24 +314,10 @@ export function WhatsApp() {
     // Desconectar
     const desconectar = async () => {
         try {
-            // Buscar API Key do banco
-            const { data: instanceData } = await supabase
-                .from('whatsapp_instances')
-                .select('api_key')
-                .eq('instance_name', INSTANCE_NAME)
-                .single()
-
-            if (instanceData?.api_key) {
-                await fetch(`${EVOLUTION_API_URL}/instance/logout/${INSTANCE_NAME}`, {
-                    method: 'DELETE',
-                    headers: { 'apikey': instanceData.api_key }
-                })
-            }
-
-            await supabase
-                .from('whatsapp_instances')
-                .update({ status: 'disconnected', qr_code_base64: null })
-                .eq('instance_name', INSTANCE_NAME)
+            const { error } = await supabase.functions.invoke('whatsapp-connect', {
+                body: { action: 'logout', instanceName }
+            })
+            if (error) console.error('Erro ao desconectar (Edge):', error)
             await loadInstance()
         } catch (error) {
             console.error('Erro ao desconectar:', error)
@@ -368,24 +329,14 @@ export function WhatsApp() {
         if (!newMessage.trim() || !selectedConversation) return
 
         try {
-            await fetch(`${EVOLUTION_API_URL}/message/sendText/${INSTANCE_NAME}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': instance?.api_key || ''
-                },
-                body: JSON.stringify({
+            const { error } = await supabase.functions.invoke('whatsapp-send', {
+                body: {
                     number: selectedConversation,
-                    text: newMessage
-                })
+                    text: newMessage,
+                    instanceName
+                }
             })
-
-            // Salvar no banco
-            await supabase.from('whatsapp_messages').insert({
-                remote_jid: selectedConversation,
-                content: newMessage,
-                from_me: true
-            })
+            if (error) throw error
 
             setNewMessage('')
             await loadMessages(selectedConversation)
@@ -456,6 +407,16 @@ export function WhatsApp() {
                                 <p className="text-sm text-gray-400">{instance?.phone_number || 'WhatsApp ativo'}</p>
                             </div>
                         </>
+                    ) : (instance?.status === 'qr_code' || instance?.qr_code_base64) ? (
+                        <>
+                            <div className="w-12 h-12 rounded-full bg-yellow-500/20 flex items-center justify-center">
+                                <QrCode className="text-yellow-400" size={24} />
+                            </div>
+                            <div>
+                                <p className="font-medium text-yellow-400">Aguardando leitura do QR</p>
+                                <p className="text-sm text-gray-400">Depois de escanear, o painel atualiza automaticamente.</p>
+                            </div>
+                        </>
                     ) : (
                         <>
                             <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
@@ -513,40 +474,10 @@ export function WhatsApp() {
 
             {/* API Key */}
             <div className="bg-card rounded-xl p-6 border border-gray-800">
-                <h3 className="text-lg font-semibold mb-4">Configuração da API</h3>
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-2">API Key Evolution</label>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                placeholder="Sua API Key"
-                                value={apiKeyInput}
-                                onChange={(e) => setApiKeyInput(e.target.value)}
-                                className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg"
-                            />
-                            <button
-                                onClick={async () => {
-                                    if (!apiKeyInput.trim()) {
-                                        alert('Insira uma API Key válida')
-                                        return
-                                    }
-                                    await supabase
-                                        .from('whatsapp_instances')
-                                        .upsert({
-                                            instance_name: INSTANCE_NAME,
-                                            api_key: apiKeyInput
-                                        }, { onConflict: 'instance_name' })
-                                    alert('API Key salva com sucesso!')
-                                    await loadInstance()
-                                }}
-                                className="px-4 py-3 bg-gold text-black rounded-lg hover:opacity-90 font-medium"
-                            >
-                                Salvar
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <h3 className="text-lg font-semibold mb-2">Configuração da API</h3>
+                <p className="text-sm text-gray-400">
+                    A conexão com a Evolution API é feita no servidor (Edge Functions) para não expor chaves no navegador.
+                </p>
             </div>
         </div>
     )
@@ -777,6 +708,21 @@ export function WhatsApp() {
             <Header title="WhatsApp" onRefresh={loadData} />
 
             <div className="p-6">
+                {/* Seletor de Instância */}
+                <div className="mb-6 flex justify-end">
+                    <InstanceSelector 
+                        selectedInstance={instanceName} 
+                        onInstanceChange={(name) => {
+                            setInstanceName(name)
+                            // Limpar estados ao trocar de instância
+                            setInstance(null)
+                            setConversations([])
+                            setSelectedConversation(null)
+                            setMessages([])
+                        }} 
+                    />
+                </div>
+
                 {/* Tabs */}
                 <div className="flex gap-2 mb-6">
                     {renderTab(TABS.CONEXAO, <Wifi size={18} />, 'Conexão')}

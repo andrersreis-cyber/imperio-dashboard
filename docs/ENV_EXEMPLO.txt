@@ -1,0 +1,9 @@
+Copie o conteúdo abaixo para um arquivo chamado `.env` na raiz do projeto.
+
+VITE_SUPABASE_URL=https://cxhypcvdijqauaibcgyp.supabase.co
+VITE_SUPABAS
+
+Observação:
+- O `.env` já é ignorado pelo git (ver `.gitignore`), então não vaza chave no repositório.
+
+

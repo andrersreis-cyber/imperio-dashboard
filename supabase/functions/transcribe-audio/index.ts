@@ -128,14 +128,14 @@ serve(async (req) => {
                             }
                         } else {
                             const errorText = await response.text()
-                            lastError = `${endpoint.name} falhou (${status}): ${errorText.substring(0, 300)}`
+                            lastError = `${endpoint.name} falhou (${response.status}): ${errorText.substring(0, 300)}`
                             console.error(`[transcribe-audio] ${lastError}`)
                             
                             // Logar erro específico deste endpoint
                             await supabase.from('error_logs').insert({
                                 error_type: 'audio_endpoint_failed',
                                 error_message: lastError,
-                                context: JSON.stringify({ endpoint: endpoint.name, status })
+                                context: JSON.stringify({ endpoint: endpoint.name, status: response.status })
                             })
                         }
                     } catch (fetchError) {
