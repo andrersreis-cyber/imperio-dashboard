@@ -11,6 +11,14 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function normalizePhoneDigits(input: string | null | undefined): string {
+    const digits = String(input ?? '').replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.startsWith('55')) return digits
+    if (digits.length === 10 || digits.length === 11) return `55${digits}`
+    return digits
+}
+
 serve(async (req) => {
     // Handle CORS
     if (req.method === 'OPTIONS') {
@@ -19,15 +27,53 @@ serve(async (req) => {
 
     try {
         const body = await req.json()
-        console.log('Webhook recebido:', JSON.stringify(body, null, 2))
+        // Evitar logar payload completo (pode conter PII: telefone, texto, mídia).
+        console.log('Webhook recebido:', { event: body?.event, instance: body?.instance || body?.instanceName })
+
+        const instanceName = body.instance || body.instanceName || 'avello'
 
         // Extrair dados da mensagem
-        const event = body.event
+        const rawEvent = body.event
+        const normalizedEvent = String(rawEvent ?? '')
+            .trim()
+            .toLowerCase()
+            // Suportar UIs que exibem eventos como "MESSAGES_UPSERT"
+            .replace(/_/g, '.')
+
+        const event = normalizedEvent
         const data = body.data
 
-        // Ignorar mensagens enviadas por nós mesmos
-        if (data?.key?.fromMe) {
-            return new Response(JSON.stringify({ status: 'ignored', reason: 'from_me' }), {
+        // Variáveis do Supabase (precisamos também para connection.update)
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+        const supabase = createClient(supabaseUrl, supabaseKey)
+
+        // Buscar API key da instância (para responder mensagens com a mesma credencial usada no connect/send)
+        const { data: instanceRow } = await supabase
+            .from('whatsapp_instances')
+            .select('api_key')
+            .eq('instance_name', instanceName)
+            .single()
+        const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
+        const evolutionKey = instanceRow?.api_key || Deno.env.get('EVOLUTION_API_KEY')
+
+        // Suportar update de conexão (mantém o painel sincronizado sem depender de polling)
+        if (event === 'connection.update') {
+            const stateRaw =
+                body?.data?.state ||
+                body?.data?.connectionState ||
+                body?.data?.instance?.state ||
+                body?.state ||
+                null
+            const state = String(stateRaw ?? '').toLowerCase()
+            const status = state === 'open' || state === 'connected' || state === 'online' ? 'connected' : 'disconnected'
+
+            await supabase
+                .from('whatsapp_instances')
+                .update({ status, updated_at: new Date().toISOString() })
+                .eq('instance_name', instanceName)
+
+            return new Response(JSON.stringify({ status: 'ok', event, instanceName, state: stateRaw }), {
                 headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             })
         }
@@ -39,9 +85,17 @@ serve(async (req) => {
             })
         }
 
+        // Ignorar mensagens enviadas por nós mesmos
+        if (data?.key?.fromMe) {
+            return new Response(JSON.stringify({ status: 'ignored', reason: 'from_me' }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            })
+        }
+
         // Extrair informações da mensagem
         const remoteJid = data?.key?.remoteJid
         const messageType = data?.messageType || 'text'
+        const phoneDigits = normalizePhoneDigits(remoteJid)
 
         // Ignorar reações (emojis de reação)
         if (messageType === 'reactionMessage') {
@@ -55,19 +109,10 @@ serve(async (req) => {
             data?.message?.imageMessage?.caption ||
             '[mídia]'
         const pushName = data?.pushName || ''
-        const instanceName = body.instance || body.instanceName || 'avello'
         const messageId = data?.key?.id
 
         console.log('Instance name:', instanceName)
-        console.log('Remote JID:', remoteJid)
-        console.log('Content original:', content)
         console.log('Message Type:', messageType)
-        console.log('Dados da mensagem (debug áudio):', JSON.stringify(data?.message))
-
-        // Variáveis do Supabase
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-        const supabase = createClient(supabaseUrl, supabaseKey)
 
         // --- LÓGICA DE TRANSCRIÇÃO DE ÁUDIO ---
         // Se for áudio, tentamos transcrever antes de salvar e processar
@@ -127,6 +172,7 @@ serve(async (req) => {
 
         // 1. Salvar mensagem recebida
         await supabase.from('whatsapp_messages').insert({
+            instance_name: instanceName,
             remote_jid: remoteJid,
             message_id: messageId,
             from_me: false,
@@ -138,13 +184,14 @@ serve(async (req) => {
         let { data: session } = await supabase
             .from('agent_sessions')
             .select('*')
+            .eq('instance_name', instanceName)
             .eq('remote_jid', remoteJid)
             .single()
 
         if (!session) {
             const { data: newSession } = await supabase
                 .from('agent_sessions')
-                .insert({ remote_jid: remoteJid, status: 'active' })
+                .insert({ instance_name: instanceName, remote_jid: remoteJid, status: 'active' })
                 .select()
                 .single()
             session = newSession
@@ -154,7 +201,7 @@ serve(async (req) => {
         const { data: cliente } = await supabase
             .from('dados_cliente')
             .select('atendimento_ia')
-            .eq('telefone', remoteJid)
+            .eq('telefone', phoneDigits)
             .single()
 
         if (cliente?.atendimento_ia === 'pause') {
@@ -199,12 +246,13 @@ serve(async (req) => {
 
         // 6. Enviar resposta via Evolution API
         if (aiResult.response) {
-            const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
-            const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
-
             console.log('Enviando para Evolution:', `${evolutionUrl}/message/sendText/${instanceName}`)
             console.log('Número:', remoteJid)
             console.log('API Key presente:', !!evolutionKey)
+
+            if (!evolutionUrl || !evolutionKey) {
+                throw new Error('Evolution API não configurada (URL/API KEY ausente)')
+            }
 
             const sendResponse = await fetch(`${evolutionUrl}/message/sendText/${instanceName}`, {
                 method: 'POST',
@@ -223,6 +271,7 @@ serve(async (req) => {
 
             // 7. Salvar resposta no banco
             await supabase.from('whatsapp_messages').insert({
+                instance_name: instanceName,
                 remote_jid: remoteJid,
                 from_me: true,
                 message_type: 'text',

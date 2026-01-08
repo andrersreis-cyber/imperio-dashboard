@@ -17,15 +17,31 @@ serve(async (req) => {
     try {
         const { number, text, instanceName } = await req.json()
 
+        if (!number || !text) {
+            throw new Error('Parâmetros obrigatórios: number, text')
+        }
+
+        const resolvedInstanceName = instanceName || 'avello'
+
         const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
-        const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+        const supabase = createClient(supabaseUrl, supabaseKey)
+
+        // Preferir key armazenada no banco para a instância e usar env como fallback
+        const { data: instanceRow } = await supabase
+            .from('whatsapp_instances')
+            .select('api_key')
+            .eq('instance_name', resolvedInstanceName)
+            .single()
+        const evolutionKey = instanceRow?.api_key || Deno.env.get('EVOLUTION_API_KEY')
 
         if (!evolutionUrl || !evolutionKey) {
             throw new Error('Evolution API não configurada')
         }
 
         // Enviar mensagem
-        const response = await fetch(`${evolutionUrl}/message/sendText/${instanceName || 'imperio-dashboard'}`, {
+        const response = await fetch(`${evolutionUrl}/message/sendText/${resolvedInstanceName}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -41,11 +57,8 @@ serve(async (req) => {
         const result = await response.json()
 
         // Salvar no banco
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-        const supabase = createClient(supabaseUrl, supabaseKey)
-
         await supabase.from('whatsapp_messages').insert({
+            instance_name: resolvedInstanceName,
             remote_jid: number,
             from_me: true,
             message_type: 'text',

@@ -74,7 +74,7 @@ export function Dashboard() {
         // Buscar clientes que precisam de atendimento humano
         const { data: clientes } = await supabase
             .from('dados_cliente')
-            .select('telefone, nome_completo, nomewpp, updated_at')
+            .select('telefone, whatsapp_jid, nome_completo, nomewpp, updated_at')
             .eq('atendimento_ia', 'pause')
             .order('updated_at', { ascending: false })
 
@@ -192,7 +192,8 @@ export function Dashboard() {
                         <CardContent>
                             <div className="space-y-2">
                                 {clientesPausados.map((cliente) => {
-                                    const telefoneFormatado = cliente.telefone.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+                                    const telefoneFormatado = String(cliente.telefone || '').replace(/\D/g, '')
+                                    const conversationJid = cliente.whatsapp_jid || (telefoneFormatado ? `${telefoneFormatado}@s.whatsapp.net` : null)
                                     const nome = cliente.nome_completo || cliente.nomewpp || 'Cliente sem nome'
                                     const tempoAguardando = new Date() - new Date(cliente.updated_at)
                                     const minutosAguardando = Math.floor(tempoAguardando / 60000)
@@ -214,12 +215,16 @@ export function Dashboard() {
                                                     </p>
                                                 </div>
                                             </div>
-                                            <Link
-                                                to={`/whatsapp?conversation=${encodeURIComponent(cliente.telefone)}`}
-                                                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
-                                            >
-                                                Atender
-                                            </Link>
+                                            {conversationJid ? (
+                                                <Link
+                                                    to={`/whatsapp?conversation=${encodeURIComponent(conversationJid)}`}
+                                                    className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                                                >
+                                                    Atender
+                                                </Link>
+                                            ) : (
+                                                <span className="text-xs text-gray-500">Sem WhatsApp</span>
+                                            )}
                                         </div>
                                     )
                                 })}

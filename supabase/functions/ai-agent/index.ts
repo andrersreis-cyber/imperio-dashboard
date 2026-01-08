@@ -10,6 +10,28 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Estado persistido por sessão
+type AgentState = {
+    itens: Array<{ nome: string; quantidade: number }>
+    modalidade: 'entrega' | 'retirada' | null
+    bairro: string | null
+    rua: string | null
+    numero: string | null
+    ponto_referencia: string | null
+    nome: string | null
+    pagamento: 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | null
+    confirmed: boolean
+}
+
+function normalizePhoneDigits(input: string | null | undefined): string {
+    const digits = String(input ?? '').replace(/\D/g, '')
+    if (!digits) return ''
+    if (digits.startsWith('55')) return digits
+    // Se vier sem código do país (DDD + número), prefixa 55
+    if (digits.length === 10 || digits.length === 11) return `55${digits}`
+    return digits
+}
+
 // System prompt da Imperatriz - Versão humanizada e sem dados hardcoded
 const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do **Império das Porções**, um restaurante familiar em Porto de Santana, Cariacica - ES.
 A filosofia da casa é: **"Nossa família servindo a sua família"**.
@@ -32,6 +54,7 @@ A filosofia da casa é: **"Nossa família servindo a sua família"**.
 - Se o cliente mencionar um item (ex: "bata", "cervela", "suco"), use **buscar_item** IMEDIATAMENTE
 - A ferramenta buscar_item agora é "inteligente": ela pode devolver o produto exato, uma lista de sugestões, ou informar que é uma CATEGORIA.
 - Se buscar_item retornar que é uma CATEGORIA (ex: "refri" -> "Refrigerantes"), sua PRÓXIMA ação OBRIGATÓRIA é chamar **listar_produtos_categoria**.
+- Se o cliente pedir "maionese extra", "bacon adicional", use buscar_item("maionese") ou buscar_item("bacon"). Se não achar, tente listar_produtos_categoria("Adicionais").
 
 ## FLUXO DE ATENDIMENTO (siga na ordem)
 
@@ -48,9 +71,15 @@ A filosofia da casa é: **"Nossa família servindo a sua família"**.
 - ❌ Invente nomes de produtos
 - ❌ Mande link de PDF quando perguntarem "quais sucos" ou "qual refri" - LISTE OS PRODUTOS!
 
+**QUANDO ENVIAR CARDÁPIO PDF:**
+- ✅ Use **enviar_cardapio_pdf** quando o cliente pedir explicitamente "cardápio", "cardápio completo", "cardápio em PDF", "manda o cardápio"
+- ✅ NÃO use PDF quando perguntarem sobre categorias específicas (ex: "quais sucos") - use listar_produtos_categoria
+- ✅ Após enviar o PDF, informe: "Enviei o cardápio completo em PDF! Dê uma olhada e me diga o que você gostaria de pedir."
+
 ### 2. MODALIDADE
    - Pergunte: "Será ENTREGA ou RETIRADA no local?"
 - **RETIRADA**: Taxa = R$0. **NÃO PEÇA ENDEREÇO!** Pule direto para etapa 4 (Nome).
+   - IMPORTANTE: Se for RETIRADA, ao confirmar o pedido, DÊ ÊNFASE que é para RETIRAR NO LOCAL.
 - **ENTREGA**: Continue com etapa 3 abaixo.
 
 ### 3. ENDEREÇO (APENAS PARA ENTREGA) - ⚠️ CRÍTICO: SIGA EM ETAPAS ⚠️
@@ -95,18 +124,19 @@ A filosofia da casa é: **"Nossa família servindo a sua família"**.
    - Peça confirmação: "Confirma este pedido?"
 - ⚠️ NUNCA crie pedido sem confirmação EXPLÍCITA do cliente!
 - Palavras aceitas como confirmação: "sim", "confirma", "pode fechar", "quero", "ok pode fazer", "pode fazer"
-- Se cliente não confirmar explicitamente, pergunte novamente: "Você confirma este pedido?"
+- O silêncio NÃO é confirmação. Se ele não disse "sim", pergunte novamente!
 
 ### 7. CRIAR PEDIDO - ⚠️ VALIDAÇÕES ANTES DE CRIAR ⚠️
 **ANTES de chamar criar_pedido:**
-1. Verifique se houve confirmação EXPLÍCITA na última mensagem do cliente
+1. Verifique se houve confirmação EXPLÍCITA ("sim", "pode", "confirmo") na última mensagem do cliente.
 2. Se não houver confirmação explícita, NÃO crie o pedido - peça confirmação novamente
 3. Para ENTREGA: certifique-se de ter bairro + rua + número preenchidos
-4. Use **verificar_pedido_duplicado** antes de criar (se disponível)
+4. Use **verificar_pedido_duplicado** OBRIGATORIAMENTE antes de criar.
+   - Se retornar duplicado=true, AVISE O CLIENTE e pergunte se ele quer mesmo duplicar.
 
 **APÓS criar pedido com sucesso:**
-- Se modalidade = "retirada": "Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar aqui em Porto de Santana."
-- Se modalidade = "entrega": "Entrega estimada em **50-70 minutos**!"
+- A ferramenta criar_pedido retorna uma mensagem de sucesso específica (mensagem_sucesso). USE ELA.
+- Se modalidade = "retirada", NUNCA fale em entrega ou motoboy. Diga apenas: "Seu pedido estará pronto em X min para retirada."
 - Finalize com um toque pessoal: "Agradecemos a preferência! Nossa família servindo a sua família! ❤️"
 
 ## REGRAS DE OURO (PRIORIDADE MÁXIMA)
@@ -189,8 +219,8 @@ const tools = [
                 properties: {
                     categoria: {
                         type: 'string',
-                        description: 'Nome da categoria: "Refrigerantes", "Sucos", "Porções", "Cervejas" ou "Água"',
-                        enum: ['Refrigerantes', 'Sucos', 'Porções', 'Cervejas', 'Água']
+                        description: 'Nome da categoria: "Refrigerantes", "Sucos", "Porções", "Cervejas", "Água" ou "Adicionais"',
+                        enum: ['Refrigerantes', 'Sucos', 'Porções', 'Cervejas', 'Água', 'Adicionais']
                     }
                 },
                 required: ['categoria']
@@ -371,6 +401,23 @@ const tools = [
                 required: ['bairro']
             }
         }
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'enviar_cardapio_pdf',
+            description: '⚠️ Use quando o cliente pedir para ver o cardápio completo ou cardápio em PDF. Envia o cardápio em PDF via WhatsApp. Use APENAS quando o cliente pedir explicitamente o cardápio completo ou PDF.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    telefone: {
+                        type: 'string',
+                        description: 'Telefone do cliente para enviar o PDF'
+                    }
+                },
+                required: ['telefone']
+            }
+        }
     }
 ]
 
@@ -387,7 +434,8 @@ serve(async (req) => {
     }
 
     try {
-        const { remoteJid, content, pushName, session } = await req.json()
+        const { remoteJid, content, pushName, session, instanceName: instanceNameFromRequest } = await req.json()
+        const phoneDigits = normalizePhoneDigits(remoteJid)
 
         // Criar cliente Supabase
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -399,7 +447,7 @@ serve(async (req) => {
         let { data: cliente } = await supabase
             .from('dados_cliente')
             .select('*')
-            .eq('telefone', remoteJid)
+            .eq('telefone', phoneDigits)
             .single()
 
         // Se cliente não existe, criar automaticamente
@@ -407,14 +455,23 @@ serve(async (req) => {
             const { data: novoCliente } = await supabase
                 .from('dados_cliente')
                 .insert({
-                    telefone: remoteJid,
+                    telefone: phoneDigits,
+                    whatsapp_jid: remoteJid,
                     nomewpp: pushName || 'Cliente WhatsApp',
                     created_at: new Date().toISOString()
                 })
                 .select()
                 .single()
             cliente = novoCliente
-            console.log('Novo cliente criado:', remoteJid)
+            console.log('Novo cliente criado:', phoneDigits)
+        }
+
+        // Manter whatsapp_jid atualizado (se vier diferente)
+        if (remoteJid && cliente?.whatsapp_jid !== remoteJid) {
+            await supabase
+                .from('dados_cliente')
+                .update({ whatsapp_jid: remoteJid, updated_at: new Date().toISOString() })
+                .eq('telefone', phoneDigits)
         }
 
         // Buscar histórico de mensagens (últimas 20 para manter contexto)
@@ -431,7 +488,7 @@ serve(async (req) => {
             {
                 role: 'system',
                 content: `## CONTEXTO ATUAL
-- Telefone: ${remoteJid}
+- Telefone: ${phoneDigits}
 - Nome WhatsApp: ${pushName || 'Não identificado'}
 - Cliente cadastrado: ${cliente ? 'Sim - ' + (cliente.nome_completo || cliente.nomewpp) : 'Não'}
 ${cliente?.endereco ? `- Último endereço: ${cliente.endereco}` : ''}
@@ -467,7 +524,7 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                 tools: tools,
                 tool_choice: 'auto',
                 max_tokens: 600,
-                temperature: 0.7
+                temperature: 0.3
             })
         })
 
@@ -484,6 +541,8 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
             for (const toolCall of choice.message.tool_calls) {
                 const functionName = toolCall.function.name
                 const args = JSON.parse(toolCall.function.arguments)
+                const argsTelefoneDigits = normalizePhoneDigits(args?.telefone)
+                const telefonePadrao = argsTelefoneDigits || phoneDigits
 
                 console.log(`Executando tool: ${functionName}`, args)
 
@@ -869,14 +928,15 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         const { data: cli } = await supabase
                             .from('dados_cliente')
                             .select('*')
-                            .eq('telefone', args.telefone)
+                            .eq('telefone', telefonePadrao)
                             .single()
                         toolResult = JSON.stringify(cli || { encontrado: false })
                         break
 
                     case 'salvar_cliente':
                         await supabase.from('dados_cliente').upsert({
-                            telefone: args.telefone,
+                            telefone: telefonePadrao,
+                            whatsapp_jid: remoteJid,
                             nome_completo: args.nome,
                             nomewpp: pushName,
                             endereco: args.endereco,
@@ -889,233 +949,61 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
 
                     case 'criar_pedido':
                         try {
-                            const itens = args.itens || []
-                            
-                            // VALIDAÇÃO 1: Para entrega, verificar endereço completo
-                            const modalidadeFinal = (args.modalidade || '').toLowerCase().trim()
-                            if (modalidadeFinal === 'entrega') {
-                                // Validar bairro
-                                if (!args.bairro) {
-                            toolResult = JSON.stringify({
-                                sucesso: false,
-                                        erro: 'Bairro não informado',
-                                        mensagem_erro: 'Para entrega, é necessário informar o bairro.',
-                                        instrucao: 'Peça ao cliente o bairro do endereço de entrega.'
-                            })
-                            break
-                        }
-
-                                // Verificar se bairro está na área de atendimento
-                                const { data: bairroCheck } = await supabase
-                                    .rpc('buscar_bairro_taxa', { bairro_busca: args.bairro })
-                                
-                                if (!bairroCheck || bairroCheck.length === 0) {
-                                    toolResult = JSON.stringify({
-                                        sucesso: false,
-                                        erro: 'Bairro não atendido',
-                                        mensagem_erro: `Não atendemos o bairro "${args.bairro}". Você pode optar pela retirada no local (gratuita)!`,
-                                        instrucao: 'NÃO crie pedido de entrega. Sugira retirada no local.'
-                                    })
-                                    break
-                                }
-                                
-                                // Validar endereço (rua e número)
-                                const enderecoCompleto = args.endereco || ''
-                                const rua = args.rua || ''
-                                const numero = args.numero || ''
-                                
-                                // Verificar se tem endereço completo de alguma forma
-                                const temRuaENumeroSeparados = rua && numero
-                                const temEnderecoComNumero = enderecoCompleto && enderecoCompleto.match(/\d+/)
-                                const temEnderecoComVirgula = enderecoCompleto.includes(',')
-                                
-                                if (!temRuaENumeroSeparados && !temEnderecoComNumero && !temEnderecoComVirgula) {
-                                    toolResult = JSON.stringify({
-                                        sucesso: false,
-                                        erro: 'Endereço incompleto',
-                                        mensagem_erro: 'Para entrega, é necessário informar rua e número do endereço.',
-                                        instrucao: 'Peça ao cliente: "Qual a rua?" e depois "Qual o número?" ou peça o endereço completo com número.'
-                                    })
-                                    break
-                                }
-                            }
-                            
-                            // VALIDAÇÃO 2: Verificar duplicação de pedidos
-                            const cincoMinutosAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-                            const { data: pedidosRecentes } = await supabase
-                                .from('pedidos')
-                                .select('id, itens, created_at')
-                                .eq('phone', args.telefone)
-                                .gte('created_at', cincoMinutosAtras)
-                                .order('created_at', { ascending: false })
-                                .limit(3)
-                            
-                            if (pedidosRecentes && pedidosRecentes.length > 0) {
-                                // Verificar se itens são similares
-                                const itensAtuaisStr = JSON.stringify(itens.map((i: any) => ({ nome: i.nome, quantidade: i.quantidade })))
-                                const pedidoSimilar = pedidosRecentes.find((p: any) => {
-                                    const itensPedido = Array.isArray(p.itens) ? p.itens : []
-                                    const itensPedidoStr = JSON.stringify(itensPedido.map((i: any) => ({ nome: i.nome, quantidade: i.quantidade })))
-                                    return itensPedidoStr === itensAtuaisStr
+                            // Chamar RPC function que encapsula toda a lógica
+                            const { data: resultado, error: erroRPC } = await supabase
+                                .rpc('criar_pedido_rpc', {
+                                    p_telefone: telefonePadrao,
+                                    p_nome_cliente: args.nome_cliente || pushName || 'Cliente WhatsApp',
+                                    p_itens: args.itens || [],
+                                    p_modalidade: args.modalidade,
+                                    p_forma_pagamento: args.forma_pagamento,
+                                    p_bairro: args.bairro || null,
+                                    p_endereco: args.endereco || null,
+                                    p_rua: args.rua || null,
+                                    p_numero: args.numero || null,
+                                    p_ponto_referencia: args.ponto_referencia || null,
+                                    p_observacoes: args.observacoes || null,
+                                    p_troco_para: args.troco_para || null
                                 })
-                                
-                                if (pedidoSimilar) {
-                                    toolResult = JSON.stringify({
-                                        sucesso: false,
-                                        erro: 'Pedido duplicado detectado',
-                                        mensagem_erro: `Encontrei um pedido similar criado há pouco tempo (Pedido #${pedidoSimilar.id}). Este é um pedido duplicado?`,
-                                        instrucao: 'Pergunte ao cliente se este é um pedido duplicado ou se ele realmente quer criar um novo pedido.'
-                                    })
-                                    break
-                                }
-                            }
-                            
-                            // Validar e calcular total real
-                            let subtotal = 0
-                            const itensValidados: any[] = []
-                            
-                            // SIMPLIFICAÇÃO ROBUSTA: Confiar nos dados passados pelo agente se ele mandar preço
-                            // O agente já chamou calcular_total_pedido antes, então ele sabe os preços.
-                            for (const item of itens) {
-                                let preco = Number(item.preco_unitario)
-                                let nome = item.nome
 
-                                // Se o agente não mandou preço (esqueceu), aí sim buscamos no banco
-                                if (!preco || preco <= 0) {
-                                    // Busca simplificada para fallback
-                                    const { data: produto } = await supabase
-                                        .from('produtos')
-                                        .select('nome, preco, preco_promocional')
-                                        .ilike('nome', `%${item.nome.split('(')[0].trim()}%`)
-                                        .limit(1)
-                                        .single()
-                                    
-                                    if (produto) {
-                                        preco = Number(produto.preco_promocional || produto.preco)
-                                        nome = produto.nome // Normaliza o nome
-                                    } else {
-                                        // Se não achou, usa o que tem (melhor fechar o pedido do que travar)
-                                        console.warn(`Produto não encontrado no banco na hora de fechar: ${item.nome}`)
-                                        preco = 0 // Alerta para revisão humana
-                                    }
-                                }
-
-                                const qtd = item.quantidade || 1
-                                subtotal += preco * qtd
-                                itensValidados.push({
-                                    nome: nome,
-                                    quantidade: qtd,
-                                    preco_unitario: preco
-                                })
-                            }
-
-                            if (itensValidados.length === 0) {
+                            if (erroRPC) {
+                                console.error('Erro ao chamar criar_pedido_rpc:', erroRPC)
                                 toolResult = JSON.stringify({
                                     sucesso: false,
-                                    erro: 'Nenhum item válido no pedido. Use buscar_item para confirmar os itens.'
+                                    erro: 'Erro técnico ao criar pedido',
+                                    erro_tecnico: erroRPC.message,
+                                    mensagem_erro: 'Houve um erro técnico ao salvar o pedido. Por favor, tente novamente.'
                                 })
-                                break
+                            } else if (resultado) {
+                                // A RPC já retorna JSONB estruturado, apenas passar adiante
+                                toolResult = JSON.stringify(resultado)
+                            } else {
+                                toolResult = JSON.stringify({
+                                    sucesso: false,
+                                    erro: 'Resposta vazia da RPC',
+                                    mensagem_erro: 'Não foi possível processar a criação do pedido.'
+                                })
                             }
-
-                            // Calcular taxa de entrega via banco de dados
-                            let taxaEntrega = 0
-                            if (args.modalidade === 'entrega' && args.bairro) {
-                                const { data: bairroData } = await supabase
-                                    .rpc('buscar_bairro_taxa', { bairro_busca: args.bairro })
-                                if (bairroData && bairroData.length > 0) {
-                                    taxaEntrega = parseFloat(bairroData[0].taxa_entrega)
-                                }
-                            }
-
-                            // Calcular desconto PIX
-                            let desconto = 0
-                            if (args.forma_pagamento?.toLowerCase() === 'pix') {
-                                desconto = subtotal * 0.05
-                            }
-
-                            const valorTotal = subtotal + taxaEntrega - desconto
-
-                            // Validar valor mínimo
-                            if (subtotal < 15) {
-                            toolResult = JSON.stringify({
-                                sucesso: false,
-                                    erro: `Valor mínimo do pedido é R$ 15,00. Subtotal atual: R$ ${subtotal.toFixed(2)}. Sugira adicionar mais itens.`
-                            })
-                            break
-                        }
-
-                            // Criar descrição dos itens
-                            const itensDescricao = itensValidados
-                                .map(i => `${i.quantidade}x ${i.nome} (R$ ${(i.preco_unitario * i.quantidade).toFixed(2)})`)
-                                .join(' + ')
-
-                            // Validar e sanitizar dados finais (modalidadeFinal já foi declarada acima)
-                            const pagamentoFinal = (args.forma_pagamento || '').toLowerCase().trim()
-                            
-                            // Montar endereço completo (rua + número)
-                            let enderecoCompleto = args.endereco || ''
-                            if (args.rua && args.numero) {
-                                enderecoCompleto = `${args.rua}, ${args.numero}`
-                            } else if (!enderecoCompleto && args.rua) {
-                                enderecoCompleto = args.rua + (args.numero ? `, ${args.numero}` : '')
-                            }
-                            
-                            // Payload para debug
-                            const pedidoPayload = {
-                            phone: args.telefone,
-                            nome_cliente: args.nome_cliente || pushName || 'Cliente WhatsApp',
-                                itens: itensValidados,
-                            valor_total: valorTotal,
-                                taxa_entrega: taxaEntrega,
-                                forma_pagamento: pagamentoFinal,
-                            endereco_entrega: enderecoCompleto || (modalidadeFinal === 'entrega' ? 'Endereço não informado' : null),
-                            bairro: args.bairro || null,
-                                ponto_referencia: args.ponto_referencia || null,
-                                observacoes: args.observacoes || (args.troco_para ? `Troco para R$ ${args.troco_para}` : null),
-                            status: 'pendente',
-                                modalidade: modalidadeFinal
-                            }
-                            
-                            console.log('Tentando inserir pedido:', JSON.stringify(pedidoPayload))
-
-                            // Inserir pedido
-                            const { data: pedido, error: erroPedido } = await supabase
-                                .from('pedidos')
-                                .insert(pedidoPayload)
-                                .select()
-                                .single()
-
-                            if (erroPedido) {
-                                console.error('Erro Supabase Insert:', erroPedido)
-                                throw new Error(`Erro Banco: ${erroPedido.message} (${erroPedido.details || ''})`)
-                            }
-
-                            // Mensagem de sucesso baseada na modalidade
-                            const mensagemSucesso = modalidadeFinal === 'retirada' 
-                                ? 'Seu pedido estará pronto em aproximadamente **30-40 minutos**! Você pode retirar no nosso restaurante.'
-                                : 'Entrega estimada em **50-70 minutos**!'
-
-                            toolResult = JSON.stringify({
-                                sucesso: true,
-                                pedido_id: pedido.id,
-                                mensagem_sucesso: mensagemSucesso,
-                                resumo: `Pedido #${pedido.id} criado com sucesso! ${mensagemSucesso}`
-                            })
                         } catch (e) {
                             console.error('Erro em criar_pedido:', e)
                             
-                            // LOGAR ERRO NO BANCO PARA DEBUG
-                            await supabase.from('error_logs').insert({
-                                context: 'criar_pedido',
-                                error_message: e.message,
-                                payload: args
-                            })
+                            // Logar erro no banco para debug
+                            try {
+                                await supabase.from('error_logs').insert({
+                                    context: 'criar_pedido',
+                                    error_message: e.message,
+                                    payload: args
+                                })
+                            } catch (logError) {
+                                // Ignorar erro de log
+                            }
 
-                            // RETORNA O ERRO TÉCNICO PARA O AGENTE
+                            // Retornar erro técnico para o agente
                             toolResult = JSON.stringify({
                                 sucesso: false,
                                 erro_tecnico: e.message,
-                                erro_usuario: 'Houve um erro técnico ao salvar o pedido. Por favor, verifique os dados.'
+                                erro: 'Erro técnico ao criar pedido',
+                                mensagem_erro: 'Houve um erro técnico ao salvar o pedido. Por favor, verifique os dados.'
                             })
                         }
                         break
@@ -1126,7 +1014,7 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                             const { data: pedidosRecentes } = await supabase
                                 .from('pedidos')
                                 .select('id, itens, created_at, valor_total')
-                                .eq('phone', args.telefone)
+                                .eq('phone', telefonePadrao)
                                 .gte('created_at', cincoMinutosAtras)
                                 .order('created_at', { ascending: false })
                                 .limit(5)
@@ -1182,7 +1070,7 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         const { data: ultimoPedido } = await supabase
                             .from('pedidos')
                             .select('*')
-                            .eq('phone', args.telefone)
+                            .eq('phone', telefonePadrao)
                             .order('created_at', { ascending: false })
                             .limit(1)
                             .single()
@@ -1207,7 +1095,8 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                         try {
                             // 1. Pausar IA para o cliente
                             const { data: clienteAtualizado } = await supabase.from('dados_cliente').upsert({
-                                telefone: args.telefone,
+                                telefone: telefonePadrao,
+                                whatsapp_jid: remoteJid,
                                 atendimento_ia: 'pause'
                             }, { onConflict: 'telefone' }).select().single()
 
@@ -1215,11 +1104,11 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                             const { data: cliente } = await supabase
                                 .from('dados_cliente')
                                 .select('nome_completo, nomewpp, telefone')
-                                .eq('telefone', args.telefone)
+                                .eq('telefone', telefonePadrao)
                                 .single()
 
                             const nomeCliente = cliente?.nome_completo || cliente?.nomewpp || 'Cliente'
-                            const telefoneCliente = args.telefone.replace('@s.whatsapp.net', '').replace(/\D/g, '')
+                            const telefoneCliente = telefonePadrao
 
                             // 3. Buscar instância WhatsApp conectada
                             const { data: instance } = await supabase
@@ -1327,6 +1216,68 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
                         }
                         break
 
+                    case 'enviar_cardapio_pdf':
+                        try {
+                            // Enviar PDF diretamente via Evolution API
+                            const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
+                            const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
+                            
+                            // Obter instanceName do contexto (vem do webhook)
+                            // Se não vier, usar padrão 'avello'
+                            const instanceName = instanceNameFromRequest || session?.instance_name || 'avello'
+                            
+                            if (!evolutionUrl || !evolutionKey) {
+                                throw new Error('Evolution API não configurada')
+                            }
+                            
+                            const telefoneParaEnvio = args.telefone || telefonePadrao
+                            
+                            // URL do PDF no Supabase Storage (bucket: arquivos)
+                            const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+                            const pdfUrl = `${supabaseUrl}/storage/v1/object/public/arquivos/Cardapio_Imperio.pdf`
+                            
+                            // Enviar PDF via Evolution API
+                            const evolutionResponse = await fetch(`${evolutionUrl}/message/sendMedia/${instanceName}`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'apikey': evolutionKey
+                                },
+                                body: JSON.stringify({
+                                    number: telefoneParaEnvio,
+                                    mediatype: 'document',
+                                    mimetype: 'application/pdf',
+                                    media: pdfUrl,
+                                    fileName: 'Cardapio_Imperio.pdf',
+                                    caption: '📋 Aqui está nosso cardápio completo! Escolha os itens que deseja pedir.'
+                                })
+                            })
+                            
+                            if (!evolutionResponse.ok) {
+                                const errorText = await evolutionResponse.text()
+                                console.error('Erro ao enviar PDF:', evolutionResponse.status, errorText)
+                                throw new Error(`Erro ao enviar cardápio: ${evolutionResponse.status}`)
+                            }
+                            
+                            const evolutionResult = await evolutionResponse.json()
+                            console.log('PDF enviado:', evolutionResult)
+                            
+                            toolResult = JSON.stringify({
+                                sucesso: true,
+                                mensagem: 'Cardápio em PDF enviado com sucesso! O cliente receberá o PDF no WhatsApp.',
+                                instrucao: 'Informe ao cliente que o cardápio foi enviado e aguarde ele visualizar.'
+                            })
+                        } catch (e) {
+                            console.error('Erro em enviar_cardapio_pdf:', e)
+                            toolResult = JSON.stringify({
+                                sucesso: false,
+                                erro: e.message,
+                                mensagem: 'Não consegui enviar o cardápio no momento. Você pode usar consultar_cardapio para mostrar o cardápio por escrito.',
+                                instrucao: 'Ofereça mostrar o cardápio por escrito usando consultar_cardapio.'
+                            })
+                        }
+                        break
+
                     default:
                         toolResult = JSON.stringify({ erro: 'Função não reconhecida' })
                 }
@@ -1358,7 +1309,7 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
                     model: 'gpt-4o-mini',
                     messages: messages,
                     max_tokens: 600,
-                    temperature: 0.7
+                    temperature: 0.3
                 })
             })
 

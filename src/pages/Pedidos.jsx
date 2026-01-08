@@ -133,8 +133,12 @@ export function Pedidos() {
 
     const abrirWhatsApp = (pedido) => {
         if (!pedido.phone) return
-        const phone = pedido.phone.replace(/\D/g, '')
-        const url = `https://wa.me/55${phone}`
+        let phone = String(pedido.phone || '').replace(/\D/g, '')
+        if (!phone) return
+        if (!phone.startsWith('55') && (phone.length === 10 || phone.length === 11)) {
+            phone = `55${phone}`
+        }
+        const url = `https://wa.me/${phone}`
         window.open(url, '_blank')
     }
 
