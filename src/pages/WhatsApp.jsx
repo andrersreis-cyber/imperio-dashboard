@@ -32,6 +32,8 @@ export function WhatsApp() {
     const [searchParams, setSearchParams] = useSearchParams()
     const [activeTab, setActiveTab] = useState(TABS.CONEXAO)
     const [loading, setLoading] = useState(true)
+    const [conversationsError, setConversationsError] = useState(null)
+    const [messagesError, setMessagesError] = useState(null)
     
     // Estado da instância selecionada
     const [instanceName, setInstanceName] = useState(() => localStorage.getItem('selected_instance') || 'avello')
@@ -159,12 +161,20 @@ export function WhatsApp() {
 
     // Carregar conversas
     const loadConversations = async () => {
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('remote_jid, content, from_me, created_at')
             .eq('instance_name', instanceName)
             .order('created_at', { ascending: false })
 
+        if (error) {
+            console.error('Erro ao carregar conversas:', error)
+            setConversationsError(error.message || 'Erro ao carregar conversas')
+            setConversations([])
+            return
+        }
+
+        setConversationsError(null)
         // Agrupar por remote_jid
 
         const grouped = {}
@@ -203,12 +213,21 @@ export function WhatsApp() {
     // Carregar mensagens de uma conversa
     const loadMessages = async (remoteJid) => {
         setSelectedConversation(remoteJid)
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('whatsapp_messages')
             .select('*')
             .eq('instance_name', instanceName)
             .eq('remote_jid', remoteJid)
             .order('created_at', { ascending: true })
+
+        if (error) {
+            console.error('Erro ao carregar mensagens:', error)
+            setMessagesError(error.message || 'Erro ao carregar mensagens')
+            setMessages([])
+            return
+        }
+
+        setMessagesError(null)
         setMessages(data || [])
     }
 
@@ -491,7 +510,11 @@ export function WhatsApp() {
                     <h3 className="font-semibold">Conversas</h3>
                 </div>
                 <div className="overflow-y-auto h-full">
-                    {conversations.length === 0 ? (
+                    {conversationsError ? (
+                        <p className="text-center text-red-400 py-8 px-4">
+                            Erro ao carregar conversas: {conversationsError}
+                        </p>
+                    ) : conversations.length === 0 ? (
                         <p className="text-center text-gray-500 py-8">Nenhuma conversa</p>
                     ) : (
                         conversations.map((conv) => (
@@ -528,6 +551,11 @@ export function WhatsApp() {
 
                         {/* Mensagens */}
                         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                            {messagesError && (
+                                <div className="text-center text-red-400 py-2 px-3">
+                                    Erro ao carregar mensagens: {messagesError}
+                                </div>
+                            )}
                             {messages.map((msg) => (
                                 <div
                                     key={msg.id}

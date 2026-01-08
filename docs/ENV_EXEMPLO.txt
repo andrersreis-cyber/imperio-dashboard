@@ -7,3 +7,10 @@ Observação:
 - O `.env` já é ignorado pelo git (ver `.gitignore`), então não vaza chave no repositório.
 
 
+
+
+
+
+
+
+
