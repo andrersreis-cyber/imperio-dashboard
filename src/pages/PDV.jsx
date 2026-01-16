@@ -71,7 +71,7 @@ export function PDV() {
         }
         init()
 
-        // Realtime: atualizar comandas quando houver mudanças
+        // Realtime: atualizar comandas e mesas quando houver mudanças
         const channelComandas = supabase
             .channel('pdv-comandas-changes')
             .on('postgres_changes',
@@ -86,6 +86,13 @@ export function PDV() {
                 () => {
                     console.log('[PDV] Atualização em itens_comanda')
                     fetchComandasAbertas()
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'mesas' },
+                () => {
+                    console.log('[PDV] Atualização em mesas')
+                    fetchData() // Recarrega mesas
                 }
             )
             .subscribe()
@@ -440,7 +447,7 @@ export function PDV() {
                 
                 if (erroItens) throw erroItens
                 
-                // Criar pedido para cozinha
+                // Criar pedido para cozinha - vai direto para preparação (cliente no local)
                 await supabase.from('pedidos').insert({ 
                     itens: itensJson,
                     valor_total: calcularSubtotal(), 
@@ -449,7 +456,7 @@ export function PDV() {
                     bairro: 'No local', 
                     forma_pagamento: 'pendente',
                     observacoes: `Comanda #${comandaSelecionada.id} - PDV`, 
-                    status: 'pendente', 
+                    status: 'preparando', // Pedido de mesa vai direto para preparação
                     modalidade: 'mesa' 
                 })
                 
@@ -490,6 +497,7 @@ export function PDV() {
             imprimirCupom(data, formaPagamento)
             
             if (mesaSelecionada) {
+                // Pedido de mesa vai direto para preparação (cliente no local)
                 await supabase.from('pedidos').insert({ 
                     itens: itensJson, 
                     valor_total: calcularTotal(), 
@@ -498,7 +506,7 @@ export function PDV() {
                     bairro: 'No local', 
                     forma_pagamento: formaPagamento, 
                     observacoes: `MESA ${mesaSelecionada.numero} - PDV #${data.id}`, 
-                    status: 'pendente', 
+                    status: 'preparando', // Pedido de mesa vai direto para preparação
                     modalidade: 'mesa' 
                 })
                 await supabase.from('mesas').update({ status: 'ocupada' }).eq('id', mesaSelecionada.id)
@@ -790,15 +798,27 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                         )}
                     </div>
                     
-                    {/* Indicador de comanda aberta */}
+                    {/* Indicador de comanda aberta com itens existentes */}
                     {comandaSelecionada && (
-                        <div className="mt-2 p-2 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs">
-                            <p className="text-orange-400 font-medium">
-                                📋 Comanda #{comandaSelecionada.id} - {itensComandaAtual.length} item(s) já na comanda
-                            </p>
-                            <p className="text-gray-400 mt-1">
-                                Os itens serão adicionados à comanda existente
-                            </p>
+                        <div className="mt-2 bg-orange-500/10 border border-orange-500/30 rounded-lg overflow-hidden">
+                            <div className="p-2 border-b border-orange-500/20">
+                                <p className="text-orange-400 font-medium text-sm">
+                                    📋 Comanda #{comandaSelecionada.id} - R$ {Number(comandaSelecionada.valor_total || 0).toFixed(2)}
+                                </p>
+                            </div>
+                            {itensComandaAtual.length > 0 && (
+                                <div className="max-h-32 overflow-y-auto">
+                                    {itensComandaAtual.map((item, idx) => (
+                                        <div key={idx} className="px-2 py-1.5 flex justify-between text-xs border-b border-orange-500/10 last:border-0">
+                                            <span className="text-gray-300">{item.quantidade}x {item.nome_produto}</span>
+                                            <span className="text-orange-400">R$ {(item.quantidade * item.preco_unitario).toFixed(2)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="p-2 bg-orange-500/5 text-xs text-gray-400">
+                                Novos itens serão adicionados à comanda
+                            </div>
                         </div>
                     )}
                 </div>

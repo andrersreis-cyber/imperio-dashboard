@@ -234,6 +234,7 @@ export function Garcom() {
             const totalItens = carrinho.reduce((sum, item) => sum + (item.preco * item.quantidade), 0)
 
             // Criar pedido na tabela pedidos para aparecer no filtro de Mesa
+            // Status 'preparando' pois cliente está no local (não precisa aceite como delivery)
             const { data: pedidoData, error: pedidoError } = await supabase
                 .from('pedidos')
                 .insert({
@@ -252,7 +253,7 @@ export function Garcom() {
                     bairro: 'No local',
                     forma_pagamento: 'pendente',
                     observacoes: `Comanda #${comanda.id} - Garçom: ${nomeGarcom}`,
-                    status: 'pendente',
+                    status: 'preparando', // Pedido de mesa vai direto para preparação
                     modalidade: 'mesa'
                 })
                 .select()
