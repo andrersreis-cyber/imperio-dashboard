@@ -43,6 +43,7 @@ DECLARE
     v_pedido_similar RECORD;
     v_itens_atuais_str TEXT;
     v_mensagem_sucesso TEXT;
+    v_bairro_nome_final TEXT;  -- Nome do bairro (só preenchido se entrega)
 BEGIN
     -- ============================================
     -- 1. VALIDAÇÕES INICIAIS
@@ -138,6 +139,7 @@ BEGIN
         END IF;
         
         v_taxa_entrega := COALESCE(v_bairro_data.taxa_entrega::NUMERIC, 0);
+        v_bairro_nome_final := COALESCE(v_bairro_data.nome, p_bairro);
         
         -- Montar endereço completo
         v_endereco_completo := COALESCE(p_endereco, '');
@@ -160,6 +162,7 @@ BEGIN
         -- Retirada: não precisa endereço
         v_endereco_completo := NULL;
         v_taxa_entrega := 0;
+        v_bairro_nome_final := NULL;
     END IF;
     
     -- ============================================
@@ -402,7 +405,7 @@ BEGIN
             v_taxa_entrega,
             v_pagamento_final,
             CASE WHEN v_modalidade_final = 'entrega' THEN v_endereco_completo ELSE NULL END,
-            CASE WHEN v_modalidade_final = 'entrega' THEN COALESCE(v_bairro_data.nome, p_bairro) ELSE NULL END,
+            v_bairro_nome_final,
             p_ponto_referencia,
             NULLIF(v_observacoes_final, ''),
             'pendente',
