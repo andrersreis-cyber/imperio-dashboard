@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Header } from '../components/Header'
 import { supabase } from '../lib/supabase'
-import { Calendar, Download } from 'lucide-react'
+import { Calendar, Download, Star, ThumbsUp, Truck, Utensils } from 'lucide-react'
 import {
     BarChart,
     Bar,
@@ -17,6 +17,7 @@ import {
 } from 'recharts'
 
 const COLORS = ['#D4AF37', '#22c55e', '#3b82f6', '#ef4444', '#a855f7', '#f59e0b']
+const SATISFACTION_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#D4AF37'] // Ruim, Regular, Bom, Excelente
 
 export function Reports() {
     const [dateRange, setDateRange] = useState('7')
@@ -24,6 +25,7 @@ export function Reports() {
     const [paymentData, setPaymentData] = useState([])
     const [neighborhoodData, setNeighborhoodData] = useState([])
     const [totals, setTotals] = useState({ pedidos: 0, faturamento: 0 })
+    const [satisfactionData, setSatisfactionData] = useState(null)
     const [loading, setLoading] = useState(true)
 
     const fetchData = async () => {
@@ -72,6 +74,22 @@ export function Reports() {
                 .slice(0, 5)
                 .map(([bairro, pedidos]) => ({ bairro, pedidos }))
             setNeighborhoodData(sortedNeighborhoods)
+        }
+
+        // Buscar métricas de satisfação
+        try {
+            const { data: metricas, error: metricasError } = await supabase
+                .rpc('metricas_satisfacao', {
+                    p_data_inicio: startDate.toISOString().split('T')[0],
+                    p_data_fim: new Date().toISOString().split('T')[0]
+                })
+            
+            if (!metricasError && metricas) {
+                setSatisfactionData(metricas)
+            }
+        } catch (e) {
+            console.log('Métricas de satisfação ainda não disponíveis:', e)
+            setSatisfactionData(null)
         }
 
         setLoading(false)
@@ -227,6 +245,200 @@ export function Reports() {
                         </div>
                     </div>
                 </div>
+
+                {/* Satisfaction Metrics Section */}
+                {satisfactionData && satisfactionData.total_avaliacoes > 0 && (
+                    <div className="space-y-6">
+                        <h2 className="text-xl font-bold flex items-center gap-2">
+                            <Star className="text-gold" size={24} />
+                            Satisfação dos Clientes
+                        </h2>
+                        
+                        {/* Satisfaction Summary Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className="p-2 bg-gold/20 rounded-lg">
+                                        <Star className="text-gold" size={20} />
+                                    </div>
+                                    <p className="text-gray-400 text-sm">Média Geral</p>
+                                </div>
+                                <p className="text-3xl font-bold text-gold">
+                                    {satisfactionData.media_geral?.toFixed(1) || '0'}/4
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    {satisfactionData.total_avaliacoes} avaliações
+                                </p>
+                            </div>
+                            
+                            <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className="p-2 bg-orange-500/20 rounded-lg">
+                                        <Utensils className="text-orange-500" size={20} />
+                                    </div>
+                                    <p className="text-gray-400 text-sm">Comida</p>
+                                </div>
+                                <p className="text-3xl font-bold">
+                                    {satisfactionData.media_comida?.toFixed(1) || '0'}/4
+                                </p>
+                                <div className="mt-2 bg-gray-700 rounded-full h-2">
+                                    <div 
+                                        className="bg-orange-500 h-2 rounded-full transition-all"
+                                        style={{ width: `${(satisfactionData.media_comida / 4) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className="p-2 bg-blue-500/20 rounded-lg">
+                                        <Truck className="text-blue-500" size={20} />
+                                    </div>
+                                    <p className="text-gray-400 text-sm">Entrega</p>
+                                </div>
+                                <p className="text-3xl font-bold">
+                                    {satisfactionData.media_entrega?.toFixed(1) || '0'}/4
+                                </p>
+                                <div className="mt-2 bg-gray-700 rounded-full h-2">
+                                    <div 
+                                        className="bg-blue-500 h-2 rounded-full transition-all"
+                                        style={{ width: `${(satisfactionData.media_entrega / 4) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className="p-2 bg-green-500/20 rounded-lg">
+                                        <ThumbsUp className="text-green-500" size={20} />
+                                    </div>
+                                    <p className="text-gray-400 text-sm">Recomendação</p>
+                                </div>
+                                <p className="text-3xl font-bold">
+                                    {satisfactionData.media_recomendacao?.toFixed(1) || '0'}/4
+                                </p>
+                                <div className="mt-2 bg-gray-700 rounded-full h-2">
+                                    <div 
+                                        className="bg-green-500 h-2 rounded-full transition-all"
+                                        style={{ width: `${(satisfactionData.media_recomendacao / 4) * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Distribution Charts */}
+                        {satisfactionData.distribuicao && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                {/* Comida Distribution */}
+                                <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                        <Utensils className="text-orange-500" size={18} />
+                                        Notas - Comida
+                                    </h3>
+                                    <div className="space-y-3">
+                                        {['4', '3', '2', '1'].map((nota, idx) => {
+                                            const count = satisfactionData.distribuicao?.comida?.[nota] || 0
+                                            const total = satisfactionData.total_avaliacoes || 1
+                                            const percent = (count / total) * 100
+                                            const labels = ['😞 Ruim', '😐 Regular', '😊 Bom', '😋 Excelente']
+                                            return (
+                                                <div key={nota} className="flex items-center gap-3">
+                                                    <span className="text-sm w-24">{labels[3 - idx]}</span>
+                                                    <div className="flex-1 bg-gray-700 rounded-full h-4">
+                                                        <div 
+                                                            className="h-4 rounded-full transition-all"
+                                                            style={{ 
+                                                                width: `${percent}%`,
+                                                                backgroundColor: SATISFACTION_COLORS[3 - idx]
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-sm w-8 text-right">{count}</span>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Entrega Distribution */}
+                                <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                        <Truck className="text-blue-500" size={18} />
+                                        Notas - Entrega
+                                    </h3>
+                                    <div className="space-y-3">
+                                        {['4', '3', '2', '1'].map((nota, idx) => {
+                                            const count = satisfactionData.distribuicao?.entrega?.[nota] || 0
+                                            const total = satisfactionData.total_avaliacoes || 1
+                                            const percent = (count / total) * 100
+                                            const labels = ['😞 Ruim', '😐 Regular', '😊 Bom', '😋 Excelente']
+                                            return (
+                                                <div key={nota} className="flex items-center gap-3">
+                                                    <span className="text-sm w-24">{labels[3 - idx]}</span>
+                                                    <div className="flex-1 bg-gray-700 rounded-full h-4">
+                                                        <div 
+                                                            className="h-4 rounded-full transition-all"
+                                                            style={{ 
+                                                                width: `${percent}%`,
+                                                                backgroundColor: SATISFACTION_COLORS[3 - idx]
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-sm w-8 text-right">{count}</span>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Recomendação Distribution */}
+                                <div className="bg-card rounded-xl p-6 border border-gray-800">
+                                    <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                                        <ThumbsUp className="text-green-500" size={18} />
+                                        Notas - Recomendação
+                                    </h3>
+                                    <div className="space-y-3">
+                                        {['4', '3', '2', '1'].map((nota, idx) => {
+                                            const count = satisfactionData.distribuicao?.recomendacao?.[nota] || 0
+                                            const total = satisfactionData.total_avaliacoes || 1
+                                            const percent = (count / total) * 100
+                                            const labels = ['Não', 'Talvez', 'Provável', 'Certeza!']
+                                            return (
+                                                <div key={nota} className="flex items-center gap-3">
+                                                    <span className="text-sm w-24">{labels[3 - idx]}</span>
+                                                    <div className="flex-1 bg-gray-700 rounded-full h-4">
+                                                        <div 
+                                                            className="h-4 rounded-full transition-all"
+                                                            style={{ 
+                                                                width: `${percent}%`,
+                                                                backgroundColor: SATISFACTION_COLORS[3 - idx]
+                                                            }}
+                                                        />
+                                                    </div>
+                                                    <span className="text-sm w-8 text-right">{count}</span>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Message when no satisfaction data */}
+                {(!satisfactionData || satisfactionData.total_avaliacoes === 0) && (
+                    <div className="bg-card rounded-xl p-6 border border-gray-800 text-center">
+                        <Star className="text-gray-600 mx-auto mb-3" size={40} />
+                        <h3 className="text-lg font-semibold text-gray-400">Avaliações de Satisfação</h3>
+                        <p className="text-gray-500 mt-2">
+                            Ainda não há avaliações no período selecionado.
+                        </p>
+                        <p className="text-gray-600 text-sm mt-1">
+                            Os clientes recebem um quiz de satisfação 30 minutos após a entrega.
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     )

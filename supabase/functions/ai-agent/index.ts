@@ -1,6 +1,6 @@
 // Supabase Edge Function: ai-agent
-// Agente Simplificado - Envia link do app de delivery e consulta status de pedidos
-// Versão 3.0 - Simplificado
+// Agente Simplificado - Envia link do app de delivery, consulta status de pedidos e quiz de satisfação
+// Versão 3.1 - Com Quiz de Satisfação
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -20,6 +20,55 @@ function normalizePhoneDigits(input: string | null | undefined): string {
 
 // URL do App de Delivery
 const APP_DELIVERY_URL = 'https://imperiofood.netlify.app/cardapio'
+
+// Mensagens do Quiz de Satisfação
+const QUIZ_MENSAGENS = {
+    pergunta1: `🌟 *Pesquisa rápida do Império das Porções!*
+
+Seu pedido foi entregue e gostaríamos muito de saber sua opinião!
+
+*Como estava a COMIDA?*
+
+Responda com o número:
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular  
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!
+
+(São só 3 perguntinhas rápidas!)`,
+
+    pergunta2: `*E como foi a ENTREGA?*
+
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!`,
+
+    pergunta3: `*Última pergunta!*
+
+*Você RECOMENDARIA o Império para um amigo?*
+
+1️⃣ - 😞 Não recomendaria
+2️⃣ - 😐 Talvez
+3️⃣ - 😊 Provavelmente sim
+4️⃣ - 😋 Com certeza!`,
+
+    agradecimento: `✨ *Muito obrigado pelo feedback!*
+
+Sua opinião é super importante pra gente melhorar sempre! 
+
+Obrigado por fazer parte da família Império! 👑
+
+Até a próxima! 🍽️`,
+
+    naoEntendi: `Desculpe, não entendi! 😅
+
+Por favor, responda com um número de 1 a 4:
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!`
+}
 
 // System prompt - Agente persuasivo para cardápio online
 const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do **Império das Porções**, um restaurante familiar em Porto de Santana, Cariacica - ES.
@@ -141,19 +190,36 @@ Se perguntar "preciso instalar?", "é app?", "como funciona?":
 Você faz o pedido lá e **todo o acompanhamento você recebe aqui no WhatsApp!**
 Te aviso de tudo: quando aceitar, preparar e sair pra entrega."
 
-### 6️⃣ RECLAMAÇÕES
-- Peça desculpas
+### 6️⃣ RECLAMAÇÕES / PROBLEMAS
+- Peça desculpas sinceras
 - Use **pausar_ia** imediatamente
 - "Puxa, sinto muito! 😔 Vou chamar nosso gerente agora!"
 
 ## REGRAS
 
+### 🚨 QUANDO CHAMAR ATENDENTE HUMANO (pausar_ia)
+Use **pausar_ia** APENAS nestes casos específicos:
+1. **Reclamações** - Cliente insatisfeito com algo
+2. **Pedido errado** - Itens trocados, faltando ou diferentes
+3. **Produto com problema** - Comida fria, estragada, mal preparada
+4. **Situações fora do padrão** - Algo que você não consegue resolver
+
+### ❌ NÃO CHAMAR HUMANO PARA:
+- Cliente que não quer usar o cardápio online (insista educadamente 2x, depois aceite)
+- Dúvidas sobre cardápio, preços, horários (responda você mesma!)
+- Perguntas sobre status do pedido (use a ferramenta!)
+- Cliente pedindo informações gerais
+- Cliente confuso com o site (explique novamente com paciência)
+
+**OBJETIVO:** Ser eficiente e resolver o máximo possível sem repassar!
+
 ### ✅ FAZER:
 - Deixar MUITO claro que é um SITE, não app
 - Enfatizar que o acompanhamento é TODO pelo WhatsApp
 - Explicar que não precisa criar conta
-- Tentar 2 vezes antes de chamar humano
+- Resolver dúvidas você mesma sempre que possível
 - Usar o tempo calculado pela ferramenta
+- Ser paciente e explicar quantas vezes for necessário
 
 ### ❌ NÃO FAZER:
 - Usar "instalar" ou "baixar" (exceto para dizer que NÃO precisa)
@@ -161,6 +227,7 @@ Te aviso de tudo: quando aceitar, preparar e sair pra entrega."
 - Fazer parecer complicado
 - Fazer pedido pelo WhatsApp
 - Inventar tempo de entrega (sempre usar a ferramenta!)
+- Transferir para humano sem necessidade real
 
 ### ⚠️ FORMATAÇÃO DE LINKS (MUITO IMPORTANTE!):
 - NUNCA use formatação Markdown para links!
@@ -214,7 +281,7 @@ const tools = [
         type: 'function',
         function: {
             name: 'pausar_ia',
-            description: 'Pausa o atendimento automático e transfere para atendente humano. Use quando: 1) Cliente insistir em pedir pelo WhatsApp, 2) Cliente tiver reclamação, 3) Situação complexa que precisa de humano.',
+            description: 'Pausa o atendimento automático e transfere para atendente humano. Use APENAS para: 1) Reclamações, 2) Pedido errado/faltando itens, 3) Produto com problema (frio, estragado), 4) Situações que você não consegue resolver. NÃO USE para: dúvidas gerais, status de pedido, cliente confuso com site.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -224,7 +291,7 @@ const tools = [
                     },
                     motivo: { 
                         type: 'string',
-                        description: 'Motivo da transferência para humano'
+                        description: 'Motivo da transferência (reclamação, pedido errado, produto com problema, etc)'
                     }
                 },
                 required: ['motivo']
@@ -276,6 +343,57 @@ serve(async (req) => {
                 .update({ whatsapp_jid: remoteJid, updated_at: new Date().toISOString() })
                 .eq('telefone', phoneDigits)
         }
+
+        // ============================================
+        // VERIFICAR QUIZ DE SATISFAÇÃO PENDENTE
+        // ============================================
+        try {
+            const { data: avaliacaoCheck } = await supabase
+                .rpc('verificar_avaliacao_pendente', { p_telefone: phoneDigits })
+            
+            if (avaliacaoCheck?.tem_avaliacao_pendente) {
+                console.log(`Quiz pendente detectado para ${phoneDigits}, etapa: ${avaliacaoCheck.etapa_atual}`)
+                
+                // Processar resposta do quiz
+                const { data: resultadoQuiz } = await supabase
+                    .rpc('processar_resposta_avaliacao', { 
+                        p_telefone: phoneDigits, 
+                        p_resposta: content 
+                    })
+                
+                if (resultadoQuiz) {
+                    let respostaQuiz = ''
+                    
+                    if (resultadoQuiz.resposta_invalida) {
+                        // Resposta não reconhecida
+                        respostaQuiz = QUIZ_MENSAGENS.naoEntendi
+                    } else if (resultadoQuiz.finalizado) {
+                        // Quiz finalizado - enviar agradecimento
+                        respostaQuiz = QUIZ_MENSAGENS.agradecimento
+                    } else if (resultadoQuiz.proxima_acao === 'pergunta_entrega') {
+                        // Enviar pergunta 2
+                        respostaQuiz = QUIZ_MENSAGENS.pergunta2
+                    } else if (resultadoQuiz.proxima_acao === 'pergunta_recomendacao') {
+                        // Enviar pergunta 3
+                        respostaQuiz = QUIZ_MENSAGENS.pergunta3
+                    }
+                    
+                    if (respostaQuiz) {
+                        console.log(`Resposta do quiz: ${resultadoQuiz.proxima_acao || 'finalizado'}`)
+                        return new Response(JSON.stringify({ response: respostaQuiz }), {
+                            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+                        })
+                    }
+                }
+            }
+        } catch (quizError) {
+            console.error('Erro ao verificar quiz:', quizError)
+            // Continua processamento normal se houver erro no quiz
+        }
+
+        // ============================================
+        // PROCESSAMENTO NORMAL DO AGENTE
+        // ============================================
 
         // Buscar histórico de mensagens (últimas 10 para contexto)
         const { data: historico } = await supabase
