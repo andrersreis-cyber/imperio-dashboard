@@ -50,47 +50,16 @@ export function Pedidos() {
     const fetchPedidos = async () => {
         setLoading(true)
 
+        // Buscar apenas da tabela pedidos
+        // Garcom.jsx e PDV.jsx já criam pedidos aqui, então não precisa mais
+        // converter comandas para pedidos (que causava duplicação)
         const { data: pedidosData } = await supabase
             .from('pedidos')
             .select('*')
             .order('created_at', { ascending: false })
             .limit(50)
 
-        const { data: comandasData } = await supabase
-            .from('comandas')
-            .select(`
-                *,
-                mesas (numero),
-                itens_comanda (*)
-            `)
-            .eq('status', 'aberta')
-            .order('created_at', { ascending: false })
-
-        const comandasComoPedidos = (comandasData || [])
-            .filter(c => c.itens_comanda && c.itens_comanda.length > 0)
-            .map(comanda => ({
-                id: `C${comanda.id}`,
-                id_real: comanda.id,
-                isComanda: true,
-                nome_cliente: `Mesa ${comanda.mesas?.numero || comanda.mesa_id}`,
-                phone: '',
-                itens: comanda.itens_comanda.map(i => `${i.quantidade}x ${i.nome_produto}`), // Array de strings
-                valor_total: comanda.valor_total || 0,
-                taxa_entrega: 0,
-                endereco_entrega: `Mesa ${comanda.mesas?.numero || comanda.mesa_id}`,
-                bairro: 'No local',
-                forma_pagamento: 'pendente',
-                observacoes: `Garçom: ${comanda.garcom || 'N/A'}`,
-                status: 'pendente',
-                modalidade: 'mesa',
-                created_at: comanda.created_at,
-                mesa_numero: comanda.mesas?.numero || comanda.mesa_id
-            }))
-
-        const todosOsPedidos = [...(pedidosData || []), ...comandasComoPedidos]
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-
-        setPedidos(todosOsPedidos)
+        setPedidos(pedidosData || [])
         setLoading(false)
     }
 
