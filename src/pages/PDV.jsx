@@ -447,18 +447,52 @@ export function PDV() {
                 
                 if (erroItens) throw erroItens
                 
-                // Criar pedido para cozinha - vai direto para preparação (cliente no local)
-                await supabase.from('pedidos').insert({ 
-                    itens: itensJson,
-                    valor_total: calcularSubtotal(), 
-                    taxa_entrega: 0, 
-                    endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
-                    bairro: 'No local', 
-                    forma_pagamento: 'pendente',
-                    observacoes: `Comanda #${comandaSelecionada.id} - PDV`, 
-                    status: 'preparando', // Pedido de mesa vai direto para preparação
-                    modalidade: 'mesa' 
-                })
+                // Buscar pedido existente da comanda
+                const { data: pedidoExistente } = await supabase
+                    .from('pedidos')
+                    .select('*')
+                    .ilike('observacoes', `%Comanda #${comandaSelecionada.id}%`)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single()
+                
+                // Buscar total atualizado da comanda (trigger já atualizou)
+                const { data: comandaAtualizada } = await supabase
+                    .from('comandas')
+                    .select('valor_total')
+                    .eq('id', comandaSelecionada.id)
+                    .single()
+                
+                const novoTotal = comandaAtualizada?.valor_total || 0
+                
+                if (pedidoExistente) {
+                    // Atualizar pedido existente com novos itens
+                    const itensAntigos = Array.isArray(pedidoExistente.itens) ? pedidoExistente.itens : []
+                    const novosItens = [...itensAntigos, ...itensJson]
+                    
+                    await supabase.from('pedidos')
+                        .update({ 
+                            itens: novosItens,
+                            valor_total: novoTotal,
+                            observacoes: `${pedidoExistente.observacoes} + PDV`
+                        })
+                        .eq('id', pedidoExistente.id)
+                    
+                    console.log('[PDV] Pedido atualizado:', pedidoExistente.id)
+                } else {
+                    // Criar novo pedido se não existir
+                    await supabase.from('pedidos').insert({ 
+                        itens: itensJson,
+                        valor_total: novoTotal, 
+                        taxa_entrega: 0, 
+                        endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
+                        bairro: 'No local', 
+                        forma_pagamento: 'pendente',
+                        observacoes: `Comanda #${comandaSelecionada.id} - PDV`, 
+                        status: 'preparando',
+                        modalidade: 'mesa' 
+                    })
+                }
                 
                 // Atualizar comandas abertas
                 await fetchComandasAbertas()
