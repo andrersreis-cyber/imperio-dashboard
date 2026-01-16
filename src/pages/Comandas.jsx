@@ -11,7 +11,8 @@ import {
     Printer,
     Check,
     DollarSign,
-    RefreshCw
+    RefreshCw,
+    AlertCircle
 } from 'lucide-react'
 
 export function Comandas() {
@@ -20,9 +21,12 @@ export function Comandas() {
     const [comandaSelecionada, setComandaSelecionada] = useState(null)
     const [itensComanda, setItensComanda] = useState([])
     const [showPagamento, setShowPagamento] = useState(false)
+    const [caixaAberto, setCaixaAberto] = useState(null)
+    const [processando, setProcessando] = useState(false)
 
     useEffect(() => {
         fetchComandas()
+        verificarCaixa()
 
         // Realtime updates
         const channel = supabase
@@ -60,6 +64,27 @@ export function Comandas() {
         setLoading(false)
     }
 
+    const verificarCaixa = async () => {
+        try {
+            const { data, error } = await supabase
+                .from('caixa')
+                .select('*')
+                .eq('status', 'aberto')
+                .order('data_abertura', { ascending: false })
+                .limit(1)
+                .single()
+            
+            if (error && error.code !== 'PGRST116') {
+                console.error('[Comandas] Erro ao verificar caixa:', error)
+            }
+            
+            setCaixaAberto(data || null)
+        } catch (error) {
+            console.error('[Comandas] Erro ao verificar caixa:', error)
+            setCaixaAberto(null)
+        }
+    }
+
     const fetchItensComanda = async (comandaId) => {
         const { data } = await supabase
             .from('itens_comanda')
@@ -77,28 +102,95 @@ export function Comandas() {
 
     const fecharComanda = async (formaPagamento) => {
         if (!comandaSelecionada) return
+        
+        setProcessando(true)
 
-        // Atualizar comanda
-        await supabase
-            .from('comandas')
-            .update({
-                status: 'fechada',
-                forma_pagamento: formaPagamento,
-                closed_at: new Date().toISOString()
-            })
-            .eq('id', comandaSelecionada.id)
+        try {
+            const mesaNumero = comandaSelecionada.mesas?.numero || comandaSelecionada.mesa_id
+            const valorTotal = comandaSelecionada.valor_total || 0
 
-        // Liberar mesa
-        await supabase
-            .from('mesas')
-            .update({ status: 'livre' })
-            .eq('id', comandaSelecionada.mesa_id)
+            // 1. Se houver caixa aberto, registrar a venda
+            if (caixaAberto) {
+                // Criar registro em vendas_pdv
+                const itensJson = itensComanda.map(item => ({
+                    id: item.produto_id,
+                    nome: item.nome_produto,
+                    preco: item.preco_unitario,
+                    quantidade: item.quantidade,
+                    observacao: item.observacao
+                }))
 
-        // Fechar modal
-        setShowPagamento(false)
-        setComandaSelecionada(null)
-        setItensComanda([])
-        fetchComandas()
+                const { data: vendaData, error: vendaError } = await supabase
+                    .from('vendas_pdv')
+                    .insert({
+                        caixa_id: caixaAberto.id,
+                        itens: itensJson,
+                        subtotal: valorTotal,
+                        desconto: 0,
+                        total: valorTotal,
+                        forma_pagamento: formaPagamento,
+                        status: 'finalizada',
+                        origem: 'comanda',
+                        comanda_id: comandaSelecionada.id,
+                        mesa_numero: mesaNumero
+                    })
+                    .select()
+                    .single()
+
+                if (vendaError) {
+                    console.error('[Comandas] Erro ao criar venda:', vendaError)
+                    throw vendaError
+                }
+
+                // Criar registro em movimentacoes_caixa
+                await supabase.from('movimentacoes_caixa').insert({
+                    caixa_id: caixaAberto.id,
+                    tipo: 'entrada',
+                    valor: valorTotal,
+                    descricao: `Comanda #${comandaSelecionada.id} - Mesa ${mesaNumero}`,
+                    forma_pagamento: formaPagamento
+                })
+
+                console.log('[Comandas] Venda registrada no caixa:', vendaData?.id)
+            } else {
+                console.log('[Comandas] Nenhum caixa aberto - fechando comanda sem vincular')
+            }
+
+            // 2. Atualizar comanda com caixa_id (se houver)
+            await supabase
+                .from('comandas')
+                .update({
+                    status: 'fechada',
+                    forma_pagamento: formaPagamento,
+                    closed_at: new Date().toISOString(),
+                    caixa_id: caixaAberto?.id || null
+                })
+                .eq('id', comandaSelecionada.id)
+
+            // 3. Liberar mesa
+            await supabase
+                .from('mesas')
+                .update({ status: 'livre' })
+                .eq('id', comandaSelecionada.mesa_id)
+
+            // 4. Atualizar status dos pedidos relacionados (se existirem)
+            await supabase
+                .from('pedidos')
+                .update({ status: 'entregue' })
+                .ilike('observacoes', `%Comanda #${comandaSelecionada.id}%`)
+
+            // Fechar modal
+            setShowPagamento(false)
+            setComandaSelecionada(null)
+            setItensComanda([])
+            fetchComandas()
+            
+        } catch (error) {
+            console.error('[Comandas] Erro ao fechar comanda:', error)
+            alert('Erro ao fechar comanda: ' + error.message)
+        } finally {
+            setProcessando(false)
+        }
     }
 
     const formatarPreco = (valor) => {
@@ -327,13 +419,31 @@ export function Comandas() {
                             <h3 className="text-xl font-bold">Forma de Pagamento</h3>
                             <button
                                 onClick={() => setShowPagamento(false)}
-                                className="p-2 text-gray-400 hover:text-white"
+                                disabled={processando}
+                                className="p-2 text-gray-400 hover:text-white disabled:opacity-50"
                             >
                                 <X size={20} />
                             </button>
                         </div>
 
                         <div className="p-4">
+                            {/* Status do Caixa */}
+                            {caixaAberto ? (
+                                <div className="mb-4 p-3 bg-green-500/20 border border-green-500/50 rounded-lg flex items-center gap-2">
+                                    <Check size={16} className="text-green-400" />
+                                    <span className="text-green-400 text-sm">
+                                        Caixa #{caixaAberto.id} aberto - Venda será registrada
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="mb-4 p-3 bg-yellow-500/20 border border-yellow-500/50 rounded-lg flex items-center gap-2">
+                                    <AlertCircle size={16} className="text-yellow-400" />
+                                    <span className="text-yellow-400 text-sm">
+                                        Nenhum caixa aberto - Comanda será fechada sem vincular ao caixa
+                                    </span>
+                                </div>
+                            )}
+
                             <div className="text-center mb-6">
                                 <p className="text-gray-400">
                                     Mesa {comandaSelecionada?.mesas?.numero || comandaSelecionada?.mesa_id}
@@ -343,39 +453,46 @@ export function Comandas() {
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3">
-                                <button
-                                    onClick={() => fecharComanda('dinheiro')}
-                                    className="p-6 bg-green-600/20 border border-green-600 rounded-xl flex flex-col items-center gap-2 hover:bg-green-600/30"
-                                >
-                                    <Banknote size={32} className="text-green-400" />
-                                    <span className="font-medium">Dinheiro</span>
-                                </button>
+                            {processando ? (
+                                <div className="text-center py-8">
+                                    <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-gold mx-auto mb-4"></div>
+                                    <p className="text-gray-400">Processando pagamento...</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        onClick={() => fecharComanda('dinheiro')}
+                                        className="p-6 bg-green-600/20 border border-green-600 rounded-xl flex flex-col items-center gap-2 hover:bg-green-600/30 transition-colors"
+                                    >
+                                        <Banknote size={32} className="text-green-400" />
+                                        <span className="font-medium">Dinheiro</span>
+                                    </button>
 
-                                <button
-                                    onClick={() => fecharComanda('pix')}
-                                    className="p-6 bg-cyan-600/20 border border-cyan-600 rounded-xl flex flex-col items-center gap-2 hover:bg-cyan-600/30"
-                                >
-                                    <QrCode size={32} className="text-cyan-400" />
-                                    <span className="font-medium">PIX</span>
-                                </button>
+                                    <button
+                                        onClick={() => fecharComanda('pix')}
+                                        className="p-6 bg-cyan-600/20 border border-cyan-600 rounded-xl flex flex-col items-center gap-2 hover:bg-cyan-600/30 transition-colors"
+                                    >
+                                        <QrCode size={32} className="text-cyan-400" />
+                                        <span className="font-medium">PIX</span>
+                                    </button>
 
-                                <button
-                                    onClick={() => fecharComanda('debito')}
-                                    className="p-6 bg-blue-600/20 border border-blue-600 rounded-xl flex flex-col items-center gap-2 hover:bg-blue-600/30"
-                                >
-                                    <CreditCard size={32} className="text-blue-400" />
-                                    <span className="font-medium">Débito</span>
-                                </button>
+                                    <button
+                                        onClick={() => fecharComanda('debito')}
+                                        className="p-6 bg-blue-600/20 border border-blue-600 rounded-xl flex flex-col items-center gap-2 hover:bg-blue-600/30 transition-colors"
+                                    >
+                                        <CreditCard size={32} className="text-blue-400" />
+                                        <span className="font-medium">Débito</span>
+                                    </button>
 
-                                <button
-                                    onClick={() => fecharComanda('credito')}
-                                    className="p-6 bg-purple-600/20 border border-purple-600 rounded-xl flex flex-col items-center gap-2 hover:bg-purple-600/30"
-                                >
-                                    <CreditCard size={32} className="text-purple-400" />
-                                    <span className="font-medium">Crédito</span>
-                                </button>
-                            </div>
+                                    <button
+                                        onClick={() => fecharComanda('credito')}
+                                        className="p-6 bg-purple-600/20 border border-purple-600 rounded-xl flex flex-col items-center gap-2 hover:bg-purple-600/30 transition-colors"
+                                    >
+                                        <CreditCard size={32} className="text-purple-400" />
+                                        <span className="font-medium">Crédito</span>
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

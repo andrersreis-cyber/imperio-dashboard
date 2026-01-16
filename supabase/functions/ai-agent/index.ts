@@ -1,6 +1,6 @@
 // Supabase Edge Function: ai-agent
-// Processa mensagens com OpenAI e executa tools
-// Versão 2.0 - Busca Fuzzy Inteligente
+// Agente Simplificado - Envia link do app de delivery, consulta status de pedidos e quiz de satisfação
+// Versão 3.1 - Com Quiz de Satisfação
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -10,200 +10,268 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Estado persistido por sessão
-type AgentState = {
-    itens: Array<{ nome: string; quantidade: number }>
-    modalidade: 'entrega' | 'retirada' | null
-    bairro: string | null
-    rua: string | null
-    numero: string | null
-    ponto_referencia: string | null
-    nome: string | null
-    pagamento: 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | null
-    confirmed: boolean
-}
-
 function normalizePhoneDigits(input: string | null | undefined): string {
     const digits = String(input ?? '').replace(/\D/g, '')
     if (!digits) return ''
     if (digits.startsWith('55')) return digits
-    // Se vier sem código do país (DDD + número), prefixa 55
     if (digits.length === 10 || digits.length === 11) return `55${digits}`
     return digits
 }
 
-// System prompt da Imperatriz - Versão humanizada e sem dados hardcoded
+// URL do App de Delivery
+const APP_DELIVERY_URL = 'https://imperiofood.netlify.app/cardapio'
+
+// Mensagens do Quiz de Satisfação
+const QUIZ_MENSAGENS = {
+    pergunta1: `🌟 *Pesquisa rápida do Império das Porções!*
+
+Seu pedido foi entregue e gostaríamos muito de saber sua opinião!
+
+*Como estava a COMIDA?*
+
+Responda com o número:
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular  
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!
+
+(São só 3 perguntinhas rápidas!)`,
+
+    pergunta2: `*E como foi a ENTREGA?*
+
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!`,
+
+    pergunta3: `*Última pergunta!*
+
+*Você RECOMENDARIA o Império para um amigo?*
+
+1️⃣ - 😞 Não recomendaria
+2️⃣ - 😐 Talvez
+3️⃣ - 😊 Provavelmente sim
+4️⃣ - 😋 Com certeza!`,
+
+    agradecimento: `✨ *Muito obrigado pelo feedback!*
+
+Sua opinião é super importante pra gente melhorar sempre! 
+
+Obrigado por fazer parte da família Império! 👑
+
+Até a próxima! 🍽️`,
+
+    naoEntendi: `Desculpe, não entendi! 😅
+
+Por favor, responda com um número de 1 a 4:
+1️⃣ - 😞 Ruim
+2️⃣ - 😐 Regular
+3️⃣ - 😊 Bom
+4️⃣ - 😋 Excelente!`
+}
+
+// System prompt - Agente persuasivo para cardápio online
 const SYSTEM_PROMPT = `Você é **Imperatriz**, a assistente virtual do **Império das Porções**, um restaurante familiar em Porto de Santana, Cariacica - ES.
-A filosofia da casa é: **"Nossa família servindo a sua família"**.
+
+## SUA MISSÃO PRINCIPAL
+🎯 Ajudar os clientes e apresentar nosso **cardápio online** como uma forma prática de fazer pedidos!
+Seja simpática, acolhedora e deixe claro que o acompanhamento é TODO pelo WhatsApp.
 
 ## SUA PERSONALIDADE
-- **Acolhedora e Familiar**: Trate o cliente como parte da família.
-- **Simpática e Eficiente**: Use emojis com moderação (1-2 por mensagem) para manter a leveza.
-- **Orgulhosa da Qualidade**: Destaque nossos diferenciais, especialmente a **Maionese Caseira Especial** (que fideliza nossos clientes!) e nossas porções generosas.
-- **Humana**: Nunca seja robótica. Se não entender, peça desculpas com gentileza.
+- Acolhedora, simpática e prestativa
+- Use emojis de forma moderada para ser amigável
+- Seja paciente e clara nas explicações
+- Mostre genuíno interesse em ajudar
 
-## HORÁRIO DE FUNCIONAMENTO & LOCALIZAÇÃO
-- **Local**: Porto de Santana, Cariacica - ES.
-- **Horário**: Quarta a Domingo, das 19h30 às 23h.
-- **Retirada**: O cliente retira no nosso endereço em Porto de Santana.
+## INFORMAÇÕES DO RESTAURANTE
+- **Horário**: Quarta a Domingo, das 19h30 às 23h
+- **Local**: Porto de Santana, Cariacica - ES
+- **Filosofia**: "Nossa família servindo a sua família"
 
-## ⚠️ REGRA ABSOLUTA - LEIA COM ATENÇÃO ⚠️
-**VOCÊ NÃO SABE NENHUM PRODUTO OU PREÇO DE MEMÓRIA!**
-- SEMPRE use as ferramentas ANTES de responder sobre produtos
-- NUNCA invente nomes de produtos, sabores ou preços
-- Se o cliente mencionar um item (ex: "bata", "cervela", "suco"), use **buscar_item** IMEDIATAMENTE
-- A ferramenta buscar_item agora é "inteligente": ela pode devolver o produto exato, uma lista de sugestões, ou informar que é uma CATEGORIA.
-- Se buscar_item retornar que é uma CATEGORIA (ex: "refri" -> "Refrigerantes"), sua PRÓXIMA ação OBRIGATÓRIA é chamar **listar_produtos_categoria**.
-- Se o cliente pedir "maionese extra", "bacon adicional", use buscar_item("maionese") ou buscar_item("bacon"). Se não achar, tente listar_produtos_categoria("Adicionais").
+## 📱 SOBRE O CARDÁPIO ONLINE
 
-## FLUXO DE ATENDIMENTO (siga na ordem)
+### Link:
+https://imperiofood.netlify.app/cardapio
 
-### 1. ITENS DO PEDIDO
-**OBRIGATÓRIO**: Quando o cliente mencionar QUALQUER item, use **buscar_item** primeiro!
-- "quero uma bata" → Use buscar_item("bata") → Ferramenta retorna "Batata Frita" → Você confirma.
-- "quero uma cervela" → Use buscar_item("cervela") → Ferramenta retorna "Calabresa".
-- "quero um refri" → Use buscar_item("refri") → Ferramenta diz: "É categoria Refrigerantes" → VOCÊ CHAMA: listar_produtos_categoria("Refrigerantes").
-- "quais sucos" → Use listar_produtos_categoria("Sucos").
+### ⚠️ ESCLARECIMENTOS OBRIGATÓRIOS (SEMPRE FALAR):
+1. **É um SITE normal** - Abre no navegador como qualquer página
+2. **NÃO precisa instalar nada** - É só clicar e usar
+3. **NÃO precisa criar conta** - Só escolher e pedir
+4. **O acompanhamento é TODO pelo WhatsApp** - Você não precisa entrar no site de novo!
 
-**NUNCA**:
-- ❌ Diga "todos custam X" sem verificar
-- ❌ Liste sabores que você não verificou (ex: "Laranja, Abacaxi" - se não veio da ferramenta, NÃO EXISTE!)
-- ❌ Invente nomes de produtos
-- ❌ Mande link de PDF quando perguntarem "quais sucos" ou "qual refri" - LISTE OS PRODUTOS!
+### COMO FUNCIONA:
+1. Você acessa o link, escolhe os pratos e finaliza o pedido
+2. **Pronto! Agora é só esperar minhas mensagens aqui** 📲
+3. Te aviso quando aceitarmos, quando começar a preparar, e quando sair pra entrega!
 
-**QUANDO ENVIAR CARDÁPIO PDF:**
-- ✅ Use **enviar_cardapio_pdf** quando o cliente pedir explicitamente "cardápio", "cardápio completo", "cardápio em PDF", "manda o cardápio"
-- ✅ NÃO use PDF quando perguntarem sobre categorias específicas (ex: "quais sucos") - use listar_produtos_categoria
-- ✅ Após enviar o PDF, informe: "Enviei o cardápio completo em PDF! Dê uma olhada e me diga o que você gostaria de pedir."
+### BENEFÍCIOS:
+✅ Ver cardápio completo com fotos
+✅ Preços atualizados 
+✅ Escolher sem pressa
+✅ Sem erro na anotação
 
-### 2. MODALIDADE
-   - Pergunte: "Será ENTREGA ou RETIRADA no local?"
-- **RETIRADA**: Taxa = R$0. **NÃO PEÇA ENDEREÇO!** Pule direto para etapa 4 (Nome).
-   - IMPORTANTE: Se for RETIRADA, ao confirmar o pedido, DÊ ÊNFASE que é para RETIRAR NO LOCAL.
-- **ENTREGA**: Continue com etapa 3 abaixo.
+## 📲 ACOMPANHAMENTO DO PEDIDO (PELO WHATSAPP!)
 
-### 3. ENDEREÇO (APENAS PARA ENTREGA) - ⚠️ CRÍTICO: SIGA EM ETAPAS ⚠️
-**SE FOR RETIRADA: PULE ESTA ETAPA!**
+**IMPORTANTE:** O cliente NÃO precisa voltar ao site. Todo acompanhamento é aqui:
+- ✅ Aviso quando o restaurante aceita o pedido
+- 🍳 Aviso quando começa a preparar
+- 🛵 Aviso quando sai para entrega
+- ⏱️ Informo o tempo restante baseado no bairro
 
-**ETAPA 3.1 - BAIRRO:**
-- Pergunte: "Qual o bairro do endereço de entrega?"
-- Use **calcular_taxa_entrega** para verificar se atendemos
-- ⚠️ SE calcular_taxa_entrega retornar ERRO ou "bairro não encontrado": NÃO aceite o pedido! Informe: "Infelizmente não atendemos este bairro. Você pode retirar no local?"
-- Se bairro for atendido, mostre a taxa e continue
+## FLUXO DE ATENDIMENTO
 
-**ETAPA 3.2 - RUA:**
-- Pergunte: "Qual a rua do endereço?"
-- Aguarde resposta do cliente
-- Guarde a resposta para usar em criar_pedido
+### 1️⃣ QUANDO CLIENTE QUER FAZER PEDIDO:
 
-**ETAPA 3.3 - NÚMERO:**
-- Pergunte: "Qual o número?"
-- Aguarde resposta do cliente
-- Guarde a resposta para usar em criar_pedido
+"Oba, que bom que quer pedir! 😊
 
-**ETAPA 3.4 - PONTO DE REFERÊNCIA (opcional):**
-- Pergunte: "Tem algum ponto de referência? (ex: perto da padaria, casa amarela)"
-- Se cliente não quiser informar, pode pular esta etapa
+Pra fazer seu pedido é simples - acesse nosso cardápio online:
 
-**VALIDAÇÃO OBRIGATÓRIA (SÓ PARA ENTREGA):**
-- Antes de prosseguir, certifique-se de ter: BAIRRO + RUA + NÚMERO
-- Se faltar algum, pergunte novamente até ter todos
-- Ao chamar criar_pedido, passe rua e número separadamente nos parâmetros "rua" e "numero", OU combine em "endereco" como "Rua X, 123"
+👉 https://imperiofood.netlify.app/cardapio
 
-### 4. NOME DO CLIENTE
-- Pergunte: "Qual seu nome completo para o pedido?"
-- Aguarde resposta completa antes de prosseguir
+É só clicar no link (abre no navegador, não precisa instalar nada!):
+• Escolha os pratos com calma
+• Coloque seu endereço
+• Finalize
 
-### 5. FORMA DE PAGAMENTO
-- Opções: PIX (5% desconto), Dinheiro, Cartão Crédito, Cartão Débito
-   - Se dinheiro: "Precisa de troco? Para quanto?"
+E o melhor: você acompanha tudo por aqui no WhatsApp! 
+Te aviso quando aceitarmos, quando começar a preparar e quando sair pra entrega 🛵
 
-### 6. CONFIRMAR PEDIDO - ⚠️ CRÍTICO: CONFIRMAÇÃO EXPLÍCITA ⚠️
-- Use **calcular_total_pedido** para obter o valor correto
-- Mostre resumo completo com valores calculados pelo sistema
-   - Peça confirmação: "Confirma este pedido?"
-- ⚠️ NUNCA crie pedido sem confirmação EXPLÍCITA do cliente!
-- Palavras aceitas como confirmação: "sim", "confirma", "pode fechar", "quero", "ok pode fazer", "pode fazer"
-- O silêncio NÃO é confirmação. Se ele não disse "sim", pergunte novamente!
+Quer experimentar?"
 
-### 7. CRIAR PEDIDO - ⚠️ VALIDAÇÕES ANTES DE CRIAR ⚠️
-**ANTES de chamar criar_pedido:**
-1. Verifique se houve confirmação EXPLÍCITA ("sim", "pode", "confirmo") na última mensagem do cliente.
-2. Se não houver confirmação explícita, NÃO crie o pedido - peça confirmação novamente
-3. Para ENTREGA: certifique-se de ter bairro + rua + número preenchidos
-4. Use **verificar_pedido_duplicado** OBRIGATORIAMENTE antes de criar.
-   - Se retornar duplicado=true, AVISE O CLIENTE e pergunte se ele quer mesmo duplicar.
+### 2️⃣ SE CLIENTE RESISTIR:
 
-**APÓS criar pedido com sucesso:**
-- A ferramenta criar_pedido retorna uma mensagem de sucesso específica (mensagem_sucesso). USE ELA.
-- Se modalidade = "retirada", NUNCA fale em entrega ou motoboy. Diga apenas: "Seu pedido estará pronto em X min para retirada."
-- Finalize com um toque pessoal: "Agradecemos a preferência! Nossa família servindo a sua família! ❤️"
+"Entendo! 😊 Deixa eu explicar melhor:
 
-## REGRAS DE OURO (PRIORIDADE MÁXIMA)
-1. **SEMPRE use ferramentas ANTES de responder sobre produtos/preços**
-2. **NUNCA invente nomes de produtos ou sabores** - use listar_produtos_categoria para ver o que realmente existe
-3. **TEMOS CERVEJA SIM!** Se perguntarem, use listar_produtos_categoria("Cervejas").
-4. **Se buscar_item retornar uma CATEGORIA**, sua obrigação imediata é listar os produtos dessa categoria
-5. **Se buscar_item retornar SUGESTÕES**, apresente-as ao cliente: "Não encontrei X, você quis dizer Y?"
-6. Mantenha contexto: lembre dos itens já pedidos durante toda a conversa
-7. Valor mínimo do pedido: R$15 (sem contar taxa de entrega)
+É só clicar aqui:
+👉 https://imperiofood.netlify.app/cardapio
 
-## EXEMPLOS OBRIGATÓRIOS
-- Cliente: "tem cerveja?" → listar_produtos_categoria("Cervejas")
-- Cliente: "quero uma bata" → buscar_item("bata")
-- Cliente: "quero uma cervela" → buscar_item("cervela")
-- Cliente: "qual refri vc tem" → listar_produtos_categoria("Refrigerantes")
-- Cliente: "quero um refri" → buscar_item("refri") (Ferramenta avisa que é categoria) → listar_produtos_categoria("Refrigerantes")
+Funciona como qualquer site (tipo Google, Facebook):
+• Não baixa nada
+• Não instala nada
+• Não cria conta
 
-## TRATAMENTO DE ERROS COMUNS
-- Cliente digita errado (ex: "bata" → batata): A ferramenta corrige automaticamente - USE A FERRAMENTA!
-- Item não existe: Informe e sugira itens similares usando buscar_item
-- Bairro não atendido: Sugira retirada no local (Porto de Santana)
+Você só entra, escolhe e pronto! Depois disso eu cuido de tudo por aqui:
+- Te aviso quando aceitar ✅
+- Te aviso quando preparar 🍳
+- Te aviso quando sair 🛵
 
-## PROBLEMAS, ERROS E DEVOLUÇÕES
-- **Se o cliente reclamar de erro no pedido, atraso excessivo ou pedir devolução:**
-  1. Peça desculpas sinceras em nome da família Império.
-  2. Use IMEDIATAMENTE a ferramenta **pausar_ia** com motivo "Reclamação/Erro no Pedido".
-  3. Informe: "Peço mil desculpas pelo transtorno! 😔 Estou chamando um de nossos atendentes humanos para resolver isso agora mesmo com você."
+Tenta acessar? Qualquer dúvida me fala! 💪"
 
-## ÁUDIO TRANSCRITO
-- Se a mensagem começar com "[ÁUDIO TRANSCRITO]:", trate como texto normal dito pelo cliente.
-- Pode haver erros fonéticos na transcrição. Tente inferir a intenção pelo contexto.
-- Ex: "Quero uma coca 2 litros" pode vir como "Quero uma toca dos mitos". Use o bom senso.
+### 3️⃣ SE AINDA RESISTIR - Chamar humano:
+
+"Tudo bem! Vou chamar um atendente pra te ajudar. Aguarda só um minutinho! 😊
+
+💡 Se mudar de ideia, o cardápio tá sempre em: https://imperiofood.netlify.app/cardapio"
+
+Use a ferramenta **pausar_ia** com motivo "Cliente precisa de atendimento humano para fazer pedido"
+
+### 4️⃣ STATUS DO PEDIDO / TEMPO DE ENTREGA
+
+Quando cliente perguntar "cadê meu pedido?", "quanto tempo?", "já saiu?":
+- Use a ferramenta **consultar_status_pedido**
+- A ferramenta calcula automaticamente o tempo restante baseado no bairro e horário do pedido
+- Informe de forma clara
+
+**IMPORTANTE SOBRE TEMPO:**
+- O tempo de entrega varia por bairro (30 a 60 minutos)
+- A ferramenta já faz o cálculo: tempo_total - tempo_decorrido = tempo_restante
+- Use a previsao_entrega que vem calculada!
+
+Exemplos de resposta:
+- "Seu pedido #123 está sendo preparado! 🍳 Faltam aproximadamente 25 minutos. Te aviso quando sair!"
+- "Oi! Seu pedido foi feito há 20 minutos. O tempo total pro seu bairro é 45 min, então faltam uns 25 minutinhos! 😊"
+- "Seu pedido #456 já saiu pra entrega! 🛵 Deve chegar em 10-15 minutos!"
+
+### 5️⃣ DÚVIDAS SOBRE O CARDÁPIO
+
+Se perguntar "preciso instalar?", "é app?", "como funciona?":
+
+"Não precisa instalar nada! 😊 É um site normal que abre no navegador. 
+Você faz o pedido lá e **todo o acompanhamento você recebe aqui no WhatsApp!**
+Te aviso de tudo: quando aceitar, preparar e sair pra entrega."
+
+### 6️⃣ RECLAMAÇÕES / PROBLEMAS
+- Peça desculpas sinceras
+- Use **pausar_ia** imediatamente
+- "Puxa, sinto muito! 😔 Vou chamar nosso gerente agora!"
+
+## REGRAS
+
+### 🚨 QUANDO CHAMAR ATENDENTE HUMANO (pausar_ia)
+Use **pausar_ia** APENAS nestes casos específicos:
+1. **Reclamações** - Cliente insatisfeito com algo
+2. **Pedido errado** - Itens trocados, faltando ou diferentes
+3. **Produto com problema** - Comida fria, estragada, mal preparada
+4. **Situações fora do padrão** - Algo que você não consegue resolver
+
+### ❌ NÃO CHAMAR HUMANO PARA:
+- Cliente que não quer usar o cardápio online (insista educadamente 2x, depois aceite)
+- Dúvidas sobre cardápio, preços, horários (responda você mesma!)
+- Perguntas sobre status do pedido (use a ferramenta!)
+- Cliente pedindo informações gerais
+- Cliente confuso com o site (explique novamente com paciência)
+
+**OBJETIVO:** Ser eficiente e resolver o máximo possível sem repassar!
+
+### ✅ FAZER:
+- Deixar MUITO claro que é um SITE, não app
+- Enfatizar que o acompanhamento é TODO pelo WhatsApp
+- Explicar que não precisa criar conta
+- Resolver dúvidas você mesma sempre que possível
+- Usar o tempo calculado pela ferramenta
+- Ser paciente e explicar quantas vezes for necessário
+
+### ❌ NÃO FAZER:
+- Usar "instalar" ou "baixar" (exceto para dizer que NÃO precisa)
+- Usar a palavra "app" (preferir "cardápio online" ou "site")
+- Fazer parecer complicado
+- Fazer pedido pelo WhatsApp
+- Inventar tempo de entrega (sempre usar a ferramenta!)
+- Transferir para humano sem necessidade real
+
+### ⚠️ FORMATAÇÃO DE LINKS (MUITO IMPORTANTE!):
+- NUNCA use formatação Markdown para links!
+- NUNCA escreva [texto](url) - o WhatsApp não interpreta isso!
+- SEMPRE escreva a URL pura e simples, assim:
+  
+  ERRADO: [https://imperiofood.netlify.app/cardapio](https://imperiofood.netlify.app/cardapio)
+  ERRADO: [Clique aqui](https://imperiofood.netlify.app/cardapio)
+  
+  CERTO: https://imperiofood.netlify.app/cardapio
+  CERTO: 👉 https://imperiofood.netlify.app/cardapio
+
+- Também NUNCA use **texto** para negrito - o WhatsApp usa *texto* para itálico apenas
+
+## FRASES CORRETAS
+- "É um site normal, abre no navegador"
+- "Não precisa instalar nada"
+- "O acompanhamento é todo aqui no WhatsApp"
+- "Te aviso quando sair pra entrega"
+
+## FRASES PROIBIDAS ❌
+- "Baixe o app"
+- "Instale no celular"  
+- "Acompanhe pelo app"
+- "Abra o aplicativo"
 
 ## LEMBRE-SE
-Você é **Imperatriz**, acolhedora e eficiente. Use as ferramentas para TUDO relacionado a produtos e preços!`
+Você é **Imperatriz**! 
+O cardápio online é uma FACILIDADE.
+O cliente faz o pedido no site e recebe TUDO pelo WhatsApp!`
 
-// Definição das tools - Versão 2.0 com busca inteligente
+// Definição das tools - Versão simplificada
 const tools = [
     {
         type: 'function',
         function: {
-            name: 'buscar_item',
-            description: '⚠️ OBRIGATÓRIO: Use SEMPRE que o cliente mencionar um item (ex: "bata", "cervela", "suco", "coca"). Esta ferramenta corrige erros de digitação automaticamente. NUNCA responda sobre produtos sem usar esta ferramenta primeiro!',
+            name: 'consultar_status_pedido',
+            description: 'Consulta o status dos pedidos do cliente pelo telefone. Use quando o cliente perguntar sobre seu pedido, status, previsão de entrega, etc.',
             parameters: {
                 type: 'object',
                 properties: {
-                    termo_busca: {
+                    telefone: {
                         type: 'string',
-                        description: 'Nome ou parte do nome do item mencionado pelo cliente (ex: "batata", "bata", "calabresa", "cervela", "suco", "coca", "garrafa")'
-                    }
-                },
-                required: ['termo_busca']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'consultar_cardapio',
-            description: 'Retorna as categorias gerais do cardápio. Use quando o cliente pedir para ver opções gerais. Para ver produtos com preços de uma categoria específica, use listar_produtos_categoria.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    categoria: {
-                        type: 'string',
-                        description: 'Filtrar por categoria específica (opcional). Se não especificar, retorna todas as categorias.'
+                        description: 'Telefone do cliente (será preenchido automaticamente se não informado)'
                     }
                 }
             }
@@ -212,221 +280,25 @@ const tools = [
     {
         type: 'function',
         function: {
-            name: 'listar_produtos_categoria',
-            description: '⚠️ OBRIGATÓRIO: Use SEMPRE que o cliente perguntar sobre uma categoria (ex: "qual refri vc tem", "quais sucos", "quais cervejas", "quais as opcoes" de uma categoria). Retorna TODOS os produtos da categoria com preços reais. NUNCA invente produtos ou preços - use esta ferramenta!',
+            name: 'pausar_ia',
+            description: 'Pausa o atendimento automático e transfere para atendente humano. Use APENAS para: 1) Reclamações, 2) Pedido errado/faltando itens, 3) Produto com problema (frio, estragado), 4) Situações que você não consegue resolver. NÃO USE para: dúvidas gerais, status de pedido, cliente confuso com site.',
             parameters: {
                 type: 'object',
                 properties: {
-                    categoria: {
-                        type: 'string',
-                        description: 'Nome da categoria: "Refrigerantes", "Sucos", "Porções", "Cervejas", "Água" ou "Adicionais"',
-                        enum: ['Refrigerantes', 'Sucos', 'Porções', 'Cervejas', 'Água', 'Adicionais']
-                    }
-                },
-                required: ['categoria']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'calcular_total_pedido',
-            description: 'Calcula o total do pedido baseado nos itens. Use SEMPRE antes de confirmar o pedido para garantir valores corretos.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    itens: {
-                        type: 'array',
-                        description: 'Lista de itens do pedido',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                nome: { type: 'string', description: 'Nome exato do produto' },
-                                quantidade: { type: 'number', description: 'Quantidade' }
-                            },
-                            required: ['nome', 'quantidade']
-                        }
-                    },
-                    bairro: {
-                        type: 'string',
-                        description: 'Bairro para cálculo da taxa (opcional, se retirada não informar)'
-                    },
-                    forma_pagamento: {
-                        type: 'string',
-                        description: 'Forma de pagamento para aplicar desconto PIX se aplicável'
-                    }
-                },
-                required: ['itens']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'buscar_cliente',
-            description: 'Busca dados cadastrados do cliente pelo telefone',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: {
+                    telefone: { 
                         type: 'string',
                         description: 'Telefone do cliente'
-                    }
-                },
-                required: ['telefone']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'salvar_cliente',
-            description: 'Salva ou atualiza dados do cliente',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: { type: 'string' },
-                    nome: { type: 'string' },
-                    endereco: { type: 'string' },
-                    bairro: { type: 'string' },
-                    ponto_referencia: { type: 'string' }
-                },
-                required: ['telefone', 'nome']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'criar_pedido',
-            description: 'Cria um novo pedido no sistema. Use APENAS após o cliente confirmar explicitamente.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: { type: 'string' },
-                    nome_cliente: { type: 'string', description: 'Nome completo do cliente' },
-                    itens: {
-                        type: 'array',
-                        description: 'Lista de itens com nome e quantidade',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                nome: { type: 'string' },
-                                quantidade: { type: 'number' },
-                                preco_unitario: { type: 'number' }
-                            }
-                        }
                     },
-                    forma_pagamento: { type: 'string' },
-                    modalidade: { type: 'string', enum: ['entrega', 'retirada'] },
-                    endereco: { type: 'string', description: 'Endereço completo: rua e número (ex: "Rua das Flores, 123")' },
-                    rua: { type: 'string', description: 'Nome da rua (opcional, pode estar em endereco)' },
-                    numero: { type: 'string', description: 'Número do endereço (opcional, pode estar em endereco)' },
-                    bairro: { type: 'string' },
-                    ponto_referencia: { type: 'string' },
-                    observacoes: { type: 'string' },
-                    troco_para: { type: 'number' }
-                },
-                required: ['telefone', 'nome_cliente', 'itens', 'forma_pagamento', 'modalidade']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'buscar_ultimo_pedido',
-            description: 'Busca o último pedido do cliente para referência ou repetição',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: { type: 'string' }
-                },
-                required: ['telefone']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'verificar_pedido_duplicado',
-            description: '⚠️ OBRIGATÓRIO antes de criar pedido: Verifica se existe pedido similar criado nos últimos 5 minutos para evitar duplicação',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: { type: 'string' },
-                    itens: {
-                        type: 'array',
-                        description: 'Lista de itens do pedido a verificar',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                nome: { type: 'string' },
-                                quantidade: { type: 'number' }
-                            }
-                        }
-                    }
-                },
-                required: ['telefone', 'itens']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'pausar_ia',
-            description: 'Pausa o atendimento automático e escala para atendente humano. Use quando o cliente solicitar falar com humano ou em situações complexas.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: { type: 'string' },
-                    motivo: { type: 'string' }
-                },
-                required: ['telefone']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'calcular_taxa_entrega',
-            description: 'Verifica se o bairro é atendido e calcula a taxa de entrega',
-            parameters: {
-                type: 'object',
-                properties: {
-                    bairro: {
+                    motivo: { 
                         type: 'string',
-                        description: 'Nome do bairro do cliente'
+                        description: 'Motivo da transferência (reclamação, pedido errado, produto com problema, etc)'
                     }
                 },
-                required: ['bairro']
-            }
-        }
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'enviar_cardapio_pdf',
-            description: '⚠️ Use quando o cliente pedir para ver o cardápio completo ou cardápio em PDF. Envia o cardápio em PDF via WhatsApp. Use APENAS quando o cliente pedir explicitamente o cardápio completo ou PDF.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    telefone: {
-                        type: 'string',
-                        description: 'Telefone do cliente para enviar o PDF'
-                    }
-                },
-                required: ['telefone']
+                required: ['motivo']
             }
         }
     }
 ]
-
-// Tabela de bairros e taxas (pode ser movida para banco futuramente)
-// ========================================
-// BAIRROS: Agora vem do banco de dados
-// RPC: buscar_bairro_taxa(bairro_busca)
-// Tabela: bairros_entrega
-// ========================================
 
 serve(async (req) => {
     if (req.method === 'OPTIONS') {
@@ -434,7 +306,7 @@ serve(async (req) => {
     }
 
     try {
-        const { remoteJid, content, pushName, session, instanceName: instanceNameFromRequest } = await req.json()
+        const { remoteJid, content, pushName, instanceName: instanceNameFromRequest } = await req.json()
         const phoneDigits = normalizePhoneDigits(remoteJid)
 
         // Criar cliente Supabase
@@ -443,14 +315,13 @@ serve(async (req) => {
         const openaiKey = Deno.env.get('OPENAI_API_KEY')!
         const supabase = createClient(supabaseUrl, supabaseKey)
 
-        // Buscar dados do cliente
+        // Buscar/criar cliente
         let { data: cliente } = await supabase
             .from('dados_cliente')
             .select('*')
             .eq('telefone', phoneDigits)
             .single()
 
-        // Se cliente não existe, criar automaticamente
         if (!cliente) {
             const { data: novoCliente } = await supabase
                 .from('dados_cliente')
@@ -463,10 +334,9 @@ serve(async (req) => {
                 .select()
                 .single()
             cliente = novoCliente
-            console.log('Novo cliente criado:', phoneDigits)
         }
 
-        // Manter whatsapp_jid atualizado (se vier diferente)
+        // Atualizar whatsapp_jid se necessário
         if (remoteJid && cliente?.whatsapp_jid !== remoteJid) {
             await supabase
                 .from('dados_cliente')
@@ -474,13 +344,64 @@ serve(async (req) => {
                 .eq('telefone', phoneDigits)
         }
 
-        // Buscar histórico de mensagens (últimas 20 para manter contexto)
+        // ============================================
+        // VERIFICAR QUIZ DE SATISFAÇÃO PENDENTE
+        // ============================================
+        try {
+            const { data: avaliacaoCheck } = await supabase
+                .rpc('verificar_avaliacao_pendente', { p_telefone: phoneDigits })
+            
+            if (avaliacaoCheck?.tem_avaliacao_pendente) {
+                console.log(`Quiz pendente detectado para ${phoneDigits}, etapa: ${avaliacaoCheck.etapa_atual}`)
+                
+                // Processar resposta do quiz
+                const { data: resultadoQuiz } = await supabase
+                    .rpc('processar_resposta_avaliacao', { 
+                        p_telefone: phoneDigits, 
+                        p_resposta: content 
+                    })
+                
+                if (resultadoQuiz) {
+                    let respostaQuiz = ''
+                    
+                    if (resultadoQuiz.resposta_invalida) {
+                        // Resposta não reconhecida
+                        respostaQuiz = QUIZ_MENSAGENS.naoEntendi
+                    } else if (resultadoQuiz.finalizado) {
+                        // Quiz finalizado - enviar agradecimento
+                        respostaQuiz = QUIZ_MENSAGENS.agradecimento
+                    } else if (resultadoQuiz.proxima_acao === 'pergunta_entrega') {
+                        // Enviar pergunta 2
+                        respostaQuiz = QUIZ_MENSAGENS.pergunta2
+                    } else if (resultadoQuiz.proxima_acao === 'pergunta_recomendacao') {
+                        // Enviar pergunta 3
+                        respostaQuiz = QUIZ_MENSAGENS.pergunta3
+                    }
+                    
+                    if (respostaQuiz) {
+                        console.log(`Resposta do quiz: ${resultadoQuiz.proxima_acao || 'finalizado'}`)
+                        return new Response(JSON.stringify({ response: respostaQuiz }), {
+                            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+                        })
+                    }
+                }
+            }
+        } catch (quizError) {
+            console.error('Erro ao verificar quiz:', quizError)
+            // Continua processamento normal se houver erro no quiz
+        }
+
+        // ============================================
+        // PROCESSAMENTO NORMAL DO AGENTE
+        // ============================================
+
+        // Buscar histórico de mensagens (últimas 10 para contexto)
         const { data: historico } = await supabase
             .from('whatsapp_messages')
             .select('content, from_me, created_at')
             .eq('remote_jid', remoteJid)
             .order('created_at', { ascending: false })
-            .limit(20)
+            .limit(10)
 
         // Montar mensagens para o OpenAI
         const messages: any[] = [
@@ -488,13 +409,11 @@ serve(async (req) => {
             {
                 role: 'system',
                 content: `## CONTEXTO ATUAL
-- Telefone: ${phoneDigits}
-- Nome WhatsApp: ${pushName || 'Não identificado'}
+- Telefone do cliente: ${phoneDigits}
+- Nome no WhatsApp: ${pushName || 'Não identificado'}
 - Cliente cadastrado: ${cliente ? 'Sim - ' + (cliente.nome_completo || cliente.nomewpp) : 'Não'}
-${cliente?.endereco ? `- Último endereço: ${cliente.endereco}` : ''}
-${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
-- Horário atual (Simulado): 20:30
-- Dia da semana (Simulado): Sexta-feira`
+- Horário atual: ${new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+- Dia: ${new Date().toLocaleDateString('pt-BR', { weekday: 'long', timeZone: 'America/Sao_Paulo' })}`
             }
         ]
 
@@ -523,8 +442,8 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
                 messages: messages,
                 tools: tools,
                 tool_choice: 'auto',
-                max_tokens: 600,
-                temperature: 0.3
+                max_tokens: 500,
+                temperature: 0.7
             })
         })
 
@@ -540,740 +459,175 @@ ${cliente?.bairro ? `- Último bairro: ${cliente.bairro}` : ''}
 
             for (const toolCall of choice.message.tool_calls) {
                 const functionName = toolCall.function.name
-                const args = JSON.parse(toolCall.function.arguments)
-                const argsTelefoneDigits = normalizePhoneDigits(args?.telefone)
-                const telefonePadrao = argsTelefoneDigits || phoneDigits
+                const args = JSON.parse(toolCall.function.arguments || '{}')
+                const telefonePadrao = normalizePhoneDigits(args?.telefone) || phoneDigits
 
                 console.log(`Executando tool: ${functionName}`, args)
 
                 let toolResult = ''
 
                 switch (functionName) {
-                    case 'buscar_item':
-                        // MOTOR DE BUSCA V1 (Dicionário -> FTS -> Fuzzy)
+                    case 'consultar_status_pedido':
                         try {
-                            const termoBusca = (args.termo_busca || '').trim()
-                            if (!termoBusca) {
-                        toolResult = JSON.stringify({
-                                    status: 'erro',
-                                    mensagem: 'Termo de busca não informado.'
-                        })
-                        break
-                            }
-
-                            // Chamar o novo Motor de Busca Híbrido
-                            const { data: resultados, error: erroBusca } = await supabase
-                                .rpc('search_engine_v1', { 
-                                    termo_busca: termoBusca,
-                                    limite: 5
-                                })
-
-                            if (erroBusca) {
-                                console.error('Erro na RPC search_engine_v1:', erroBusca)
-                                throw erroBusca
-                            }
-
-                            if (!resultados || resultados.length === 0) {
-                                toolResult = JSON.stringify({
-                                    status: 'nao_encontrado',
-                                    termo: termoBusca,
-                                    mensagem: `Não encontrei nada parecido com "${termoBusca}". Sugira ver o cardápio.`
-                                })
-                            } else {
-                                // Analisar o melhor resultado (o primeiro é sempre o melhor rankeado)
-                                const melhorMatch = resultados[0]
-
-                                // CASO 1: É UMA CATEGORIA (ex: "refri" -> Categoria Refrigerantes)
-                                if (melhorMatch.tipo_resultado === 'categoria') {
-                                    // AUTOMATION: Busca automática dos produtos da categoria para evitar "preguiça" do agente
-                                    const { data: produtosCat } = await supabase
-                                        .from('produtos')
-                                        .select('nome, preco, preco_promocional')
-                                        .eq('categoria_id', melhorMatch.id)
-                                        .eq('disponivel', true)
-                                        .order('preco', { ascending: true })
-
-                                    if (produtosCat && produtosCat.length > 0) {
-                                        toolResult = JSON.stringify({
-                                            status: 'sucesso',
-                                            categoria: melhorMatch.nome,
-                                            mensagem: `Encontrei a categoria "${melhorMatch.nome}" e já trouxe os itens disponíveis:`,
-                                            itens: produtosCat.map(p => ({
-                                                nome: p.nome,
-                                                preco: Number(p.preco_promocional || p.preco)
-                                            })),
-                                            instrucao: 'APENAS liste estes produtos exatos. NÃO invente nada.'
-                                        })
-                                    } else {
-                                        toolResult = JSON.stringify({
-                                            status: 'vazio',
-                                            categoria: melhorMatch.nome,
-                                            mensagem: `A categoria "${melhorMatch.nome}" foi encontrada, mas não tem produtos disponíveis no momento.`
-                                        })
-                                    }
-                                }
-                                // CASO 2: MATCH EXATO/PERFEITO (Dicionário ou Score Alto)
-                                else if (melhorMatch.score >= 0.9) {
-                                    toolResult = JSON.stringify({
-                                        status: 'encontrado_com_certeza',
-                                        item: {
-                                            id: melhorMatch.id,
-                                            nome: melhorMatch.nome,
-                                            preco: Number(melhorMatch.preco),
-                                            descricao: melhorMatch.descricao
-                                        },
-                                        nota: melhorMatch.metodo === 'dicionario' ? 'Identificado via dicionário de termos.' : 'Match exato encontrado.'
-                                    })
-                                }
-                                // CASO 3: MATCH PROVÁVEL (FTS ou Fuzzy bom)
-                                else if (melhorMatch.score >= 0.4) {
-                                    toolResult = JSON.stringify({
-                                        status: 'sugestoes',
-                                        mensagem: `Não encontrei "${termoBusca}" exatamente, mas tenho estas opções parecidas:`,
-                                        opcoes: resultados.map((r: any) => ({
-                                            nome: r.nome,
-                                            preco: Number(r.preco),
-                                            descricao: r.descricao,
-                                            score: r.score
-                                        })),
-                                        instrucao: 'Apresente as opções ao cliente perguntando "Você quis dizer...?"'
-                                    })
-                                }
-                                // CASO 4: RESULTADO RUIM (Score baixo)
-                                else {
-                                    toolResult = JSON.stringify({
-                                        status: 'incerto',
-                                        mensagem: `Encontrei algo vagamente similar a "${termoBusca}", mas não tenho certeza.`,
-                                        sugestao_fraca: {
-                                            nome: melhorMatch.nome,
-                                            preco: Number(melhorMatch.preco)
-                                        },
-                                        instrucao: 'Diga que não encontrou exatamente e pergunte se ele quis dizer a sugestão acima, ou ofereça o cardápio.'
-                                    })
-                                }
-                            }
-
-                        } catch (e) {
-                            console.error('Erro em buscar_item:', e)
-                            toolResult = JSON.stringify({
-                                status: 'erro',
-                                mensagem: 'Erro técnico na busca. Peça para o cliente reformular.'
-                            })
-                        }
-                        break
-
-                    case 'consultar_cardapio':
-                        // NOVA FUNÇÃO: Retorna cardápio estruturado
-                        try {
-                            // Se categoria específica foi solicitada, usar listar_produtos_categoria
-                            if (args.categoria) {
-                                const { data: categoria } = await supabase
-                                    .from('categorias')
-                                    .select('id, nome')
-                                    .ilike('nome', `%${args.categoria}%`)
-                                    .limit(1)
-                                    .single()
-
-                                if (categoria) {
-                                    const { data: produtos } = await supabase
-                                        .from('produtos')
-                                        .select('nome, preco, preco_promocional, descricao')
-                                        .eq('categoria_id', categoria.id)
-                                        .eq('disponivel', true)
-                                        .order('preco', { ascending: true })
-
-                                    if (produtos && produtos.length > 0) {
-                                toolResult = JSON.stringify({
-                                            status: 'sucesso',
-                                            categoria: categoria.nome,
-                                            produtos: produtos.map(p => ({
-                                                nome: p.nome,
-                                                preco: Number(p.preco_promocional || p.preco),
-                                                descricao: p.descricao || null
-                                            })),
-                                            instrucao: 'Apresente TODOS os produtos listados acima com seus preços exatos.'
-                                })
-                                break
-                                    }
-                                }
-                            }
-
-                            // Tentar usar RPC para todas as categorias
-                            const { data: categorias, error: erroCat } = await supabase
-                                .rpc('get_menu_categories')
-
-                            if (erroCat || !categorias) {
-                                // Fallback: buscar diretamente
-                                const { data: produtos } = await supabase
-                                .from('produtos')
-                                    .select('nome, preco, preco_promocional, categoria_id')
-                                .eq('disponivel', true)
-                                    .order('nome')
-                                    .limit(30)
-
-                                if (produtos && produtos.length > 0) {
-                                    toolResult = JSON.stringify({
-                                        status: 'sucesso',
-                                        mensagem: 'Cardápio disponível:',
-                                        itens: produtos.map(p => ({
-                                            nome: p.nome,
-                                            preco: Number(p.preco_promocional || p.preco)
-                                        }))
-                                    })
-                                } else {
-                                    toolResult = JSON.stringify({
-                                        status: 'erro',
-                                        mensagem: 'Não foi possível carregar o cardápio. Pergunte o que o cliente deseja.'
-                                    })
-                                }
-                            } else {
-                                toolResult = JSON.stringify({
-                                    status: 'sucesso',
-                                    categorias: categorias.map((c: any) => ({
-                                        nome: c.categoria_nome,
-                                        total: c.total_produtos,
-                                        exemplos: c.produtos_exemplo?.slice(0, 3) || []
-                                    })),
-                                    instrucao: 'Apresente as categorias e PERGUNTE qual delas o cliente quer ver.'
-                                })
-                            }
-                        } catch (e) {
-                            console.error('Erro em consultar_cardapio:', e)
-                        toolResult = JSON.stringify({
-                                status: 'erro',
-                                mensagem: 'Erro ao consultar cardápio. Peça para o cliente dizer o que quer.'
-                        })
-                        }
-                        break
-
-                    case 'listar_produtos_categoria':
-                        // NOVA FUNÇÃO: Lista TODOS os produtos de uma categoria com preços
-                        try {
-                            const categoriaNome = args.categoria || ''
-                            if (!categoriaNome) {
-                                toolResult = JSON.stringify({
-                                    status: 'erro',
-                                    mensagem: 'Categoria não informada. Use: Refrigerantes, Sucos, Porções, Cervejas ou Água.'
-                                })
-                                break
-                            }
-
-                            // Buscar categoria pelo nome
-                            const { data: categoria, error: erroCat } = await supabase
-                                .from('categorias')
-                                .select('id, nome')
-                                .ilike('nome', `%${categoriaNome}%`)
-                                .limit(1)
-                                .single()
-
-                            if (erroCat || !categoria) {
-                                toolResult = JSON.stringify({
-                                    status: 'erro',
-                                    mensagem: `Categoria "${categoriaNome}" não encontrada. Categorias disponíveis: Refrigerantes, Sucos, Porções, Cervejas, Água.`
-                                })
-                                break
-                            }
-
-                            // Buscar TODOS os produtos da categoria com preços
-                            const { data: produtos, error: erroProd } = await supabase
-                                .from('produtos')
-                                .select('nome, preco, preco_promocional, descricao')
-                                .eq('categoria_id', categoria.id)
-                                .eq('disponivel', true)
-                                .order('preco', { ascending: true })
-
-                            if (erroProd || !produtos || produtos.length === 0) {
-                                toolResult = JSON.stringify({
-                                    status: 'erro',
-                                    mensagem: `Nenhum produto disponível na categoria "${categoria.nome}".`
-                                })
-                                break
-                            }
-
-                            toolResult = JSON.stringify({
-                                status: 'sucesso',
-                                categoria: categoria.nome,
-                                total_produtos: produtos.length,
-                                produtos: produtos.map(p => ({
-                                    nome: p.nome,
-                                    preco: Number(p.preco_promocional || p.preco)
-                                })),
-                                instrucao_CRITICA: `APENAS liste estes ${produtos.length} produtos exatos. NÃO invente outros sabores como Laranja ou Limão se eles não estiverem nesta lista!`
-                            })
-                        } catch (e) {
-                            console.error('Erro em listar_produtos_categoria:', e)
-                            toolResult = JSON.stringify({
-                                status: 'erro',
-                                mensagem: 'Erro ao buscar produtos da categoria.'
-                            })
-                        }
-                        break
-
-                    case 'calcular_total_pedido':
-                        // NOVA FUNÇÃO: Calcula total com validação
-                        try {
-                            const itens = args.itens || []
-                            if (itens.length === 0) {
-                                toolResult = JSON.stringify({
-                                    status: 'erro',
-                                    mensagem: 'Nenhum item informado para calcular.'
-                                })
-                                break
-                            }
-
-                            let subtotal = 0
-                            const itensCalculados: any[] = []
-                            const itensNaoEncontrados: string[] = []
-
-                            // Buscar preço de cada item no banco usando a BUSCA ROBUSTA
-                            for (const item of itens) {
-                                // Usa a mesma search_engine_v1 que salva o agente na busca normal
-                                const { data: resultadosBusca } = await supabase
-                                    .rpc('search_engine_v1', { 
-                                        termo_busca: item.nome,
-                                        limite: 1
-                                    })
-                                
-                                const produtoEncontrado = resultadosBusca && resultadosBusca.length > 0 ? resultadosBusca[0] : null
-
-                                if (produtoEncontrado) {
-                                    const precoUnit = Number(produtoEncontrado.preco)
-                                    const quantidade = item.quantidade || 1
-                                    const subtotalItem = precoUnit * quantidade
-
-                                    itensCalculados.push({
-                                        nome: produtoEncontrado.nome,
-                                        quantidade,
-                                        preco_unitario: precoUnit,
-                                        subtotal: subtotalItem
-                                    })
-                                    subtotal += subtotalItem
-                            } else {
-                                    // Fallback: Tenta busca direta se a engine falhar (raro)
-                                    const { data: produtoDireto } = await supabase
-                                        .from('produtos')
-                                        .select('nome, preco, preco_promocional')
-                                        .eq('disponivel', true)
-                                        .ilike('nome', `%${item.nome}%`)
-                                        .limit(1)
-                                        .single()
-
-                                    if (produtoDireto) {
-                                        const precoUnit = Number(produtoDireto.preco_promocional || produtoDireto.preco)
-                                        const quantidade = item.quantidade || 1
-                                        const subtotalItem = precoUnit * quantidade
-
-                                        itensCalculados.push({
-                                            nome: produtoDireto.nome,
-                                            quantidade,
-                                            preco_unitario: precoUnit,
-                                            subtotal: subtotalItem
-                                        })
-                                        subtotal += subtotalItem
-                            } else {
-                                        itensNaoEncontrados.push(item.nome)
-                                    }
-                                }
-                            }
-
-                            if (itensNaoEncontrados.length > 0) {
-                                toolResult = JSON.stringify({
-                                    status: 'erro_itens',
-                                    mensagem: `Itens não encontrados: ${itensNaoEncontrados.join(', ')}. Busque-os novamente com buscar_item.`,
-                                    itens_validos: itensCalculados
-                                })
-                                break
-                            }
-
-                            // Calcular taxa de entrega via banco de dados
-                            let taxaEntrega = 0
-                            let bairroNome: string | null = null
-                            if (args.bairro) {
-                                const { data: bairroData } = await supabase
-                                    .rpc('buscar_bairro_taxa', { bairro_busca: args.bairro })
-                                if (bairroData && bairroData.length > 0) {
-                                    taxaEntrega = parseFloat(bairroData[0].taxa_entrega)
-                                    bairroNome = bairroData[0].nome
-                                }
-                            }
-
-                            // Calcular desconto PIX (5%)
-                            let desconto = 0
-                            if (args.forma_pagamento?.toLowerCase() === 'pix') {
-                                desconto = subtotal * 0.05
-                            }
-
-                            const total = subtotal + taxaEntrega - desconto
-
-                            toolResult = JSON.stringify({
-                                status: 'sucesso',
-                                itens: itensCalculados,
-                                subtotal_itens: subtotal,
-                                taxa_entrega: taxaEntrega,
-                                bairro: bairroNome,
-                                desconto_pix: desconto > 0 ? desconto : null,
-                                total_final: total,
-                                resumo: `Subtotal: R$ ${subtotal.toFixed(2)}${taxaEntrega > 0 ? ` + Taxa: R$ ${taxaEntrega.toFixed(2)}` : ''}${desconto > 0 ? ` - Desconto PIX: R$ ${desconto.toFixed(2)}` : ''} = Total: R$ ${total.toFixed(2)}`
-                            })
-                        } catch (e) {
-                            console.error('Erro em calcular_total_pedido:', e)
-                            toolResult = JSON.stringify({
-                                status: 'erro',
-                                mensagem: 'Erro ao calcular total. Verifique os itens.'
-                            })
-                        }
-                        break
-
-                    case 'buscar_cliente':
-                        const { data: cli } = await supabase
-                            .from('dados_cliente')
-                            .select('*')
-                            .eq('telefone', telefonePadrao)
-                            .single()
-                        toolResult = JSON.stringify(cli || { encontrado: false })
-                        break
-
-                    case 'salvar_cliente':
-                        await supabase.from('dados_cliente').upsert({
-                            telefone: telefonePadrao,
-                            whatsapp_jid: remoteJid,
-                            nome_completo: args.nome,
-                            nomewpp: pushName,
-                            endereco: args.endereco,
-                            bairro: args.bairro,
-                            ponto_referencia: args.ponto_referencia,
-                            updated_at: new Date().toISOString()
-                        }, { onConflict: 'telefone' })
-                        toolResult = JSON.stringify({ sucesso: true })
-                        break
-
-                    case 'criar_pedido':
-                        try {
-                            // Chamar RPC function que encapsula toda a lógica
-                            const { data: resultado, error: erroRPC } = await supabase
-                                .rpc('criar_pedido_rpc', {
-                                    p_telefone: telefonePadrao,
-                                    p_nome_cliente: args.nome_cliente || pushName || 'Cliente WhatsApp',
-                                    p_itens: args.itens || [],
-                                    p_modalidade: args.modalidade,
-                                    p_forma_pagamento: args.forma_pagamento,
-                                    p_bairro: args.bairro || null,
-                                    p_endereco: args.endereco || null,
-                                    p_rua: args.rua || null,
-                                    p_numero: args.numero || null,
-                                    p_ponto_referencia: args.ponto_referencia || null,
-                                    p_observacoes: args.observacoes || null,
-                                    p_troco_para: args.troco_para || null
-                                })
-
-                            if (erroRPC) {
-                                console.error('Erro ao chamar criar_pedido_rpc:', erroRPC)
-                                toolResult = JSON.stringify({
-                                    sucesso: false,
-                                    erro: 'Erro técnico ao criar pedido',
-                                    erro_tecnico: erroRPC.message,
-                                    mensagem_erro: 'Houve um erro técnico ao salvar o pedido. Por favor, tente novamente.'
-                                })
-                            } else if (resultado) {
-                                // A RPC já retorna JSONB estruturado, apenas passar adiante
-                                toolResult = JSON.stringify(resultado)
-                            } else {
-                                toolResult = JSON.stringify({
-                                    sucesso: false,
-                                    erro: 'Resposta vazia da RPC',
-                                    mensagem_erro: 'Não foi possível processar a criação do pedido.'
-                                })
-                            }
-                        } catch (e) {
-                            console.error('Erro em criar_pedido:', e)
-                            
-                            // Logar erro no banco para debug
-                            try {
-                                await supabase.from('error_logs').insert({
-                                    context: 'criar_pedido',
-                                    error_message: e.message,
-                                    payload: args
-                                })
-                            } catch (logError) {
-                                // Ignorar erro de log
-                            }
-
-                            // Retornar erro técnico para o agente
-                            toolResult = JSON.stringify({
-                                sucesso: false,
-                                erro_tecnico: e.message,
-                                erro: 'Erro técnico ao criar pedido',
-                                mensagem_erro: 'Houve um erro técnico ao salvar o pedido. Por favor, verifique os dados.'
-                            })
-                        }
-                        break
-
-                    case 'verificar_pedido_duplicado':
-                        try {
-                            const cincoMinutosAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString()
-                            const { data: pedidosRecentes } = await supabase
+                            // Buscar pedidos do cliente
+                            const { data: pedidos, error } = await supabase
                                 .from('pedidos')
-                                .select('id, itens, created_at, valor_total')
+                                .select('id, status, itens, valor_total, created_at, modalidade, bairro')
                                 .eq('phone', telefonePadrao)
-                                .gte('created_at', cincoMinutosAtras)
                                 .order('created_at', { ascending: false })
-                                .limit(5)
-                            
-                            if (!pedidosRecentes || pedidosRecentes.length === 0) {
+                                .limit(3)
+
+                            if (error) throw error
+
+                            if (!pedidos || pedidos.length === 0) {
                                 toolResult = JSON.stringify({
-                                    duplicado: false,
-                                    mensagem: 'Nenhum pedido recente encontrado. Pode prosseguir.'
-                                })
-                                break
-                            }
-                            
-                            // Comparar itens do pedido atual com pedidos recentes
-                            const itensAtuais = args.itens || []
-                            const itensAtuaisStr = JSON.stringify(itensAtuais.map((i: any) => ({ 
-                                nome: (i.nome || '').toLowerCase().trim(), 
-                                quantidade: i.quantidade || 1 
-                            })).sort((a: any, b: any) => a.nome.localeCompare(b.nome)))
-                            
-                            const pedidoSimilar = pedidosRecentes.find((p: any) => {
-                                const itensPedido = Array.isArray(p.itens) ? p.itens : []
-                                const itensPedidoStr = JSON.stringify(itensPedido.map((i: any) => ({ 
-                                    nome: (typeof i === 'string' ? i : i.nome || '').toLowerCase().trim(), 
-                                    quantidade: typeof i === 'object' ? (i.quantidade || 1) : 1 
-                                })).sort((a: any, b: any) => a.nome.localeCompare(b.nome)))
-                                
-                                return itensPedidoStr === itensAtuaisStr
-                            })
-                            
-                            if (pedidoSimilar) {
-                                toolResult = JSON.stringify({
-                                    duplicado: true,
-                                    pedido_id: pedidoSimilar.id,
-                                    mensagem: `⚠️ ATENÇÃO: Encontrei um pedido similar criado há pouco tempo (Pedido #${pedidoSimilar.id}).`,
-                                    instrucao: 'Pergunte ao cliente se este é um pedido duplicado ou se ele realmente quer criar um novo pedido com os mesmos itens.'
+                                    encontrado: false,
+                                    mensagem: 'Não encontrei pedidos recentes para este telefone. O cliente pode ter feito o pedido com outro número ou ainda não fez nenhum pedido.'
                                 })
                             } else {
+                                // Buscar tempos de entrega dos bairros
+                                const bairrosUnicos = [...new Set(pedidos.map(p => p.bairro).filter(Boolean))]
+                                let temposBairros: { [key: string]: number } = {}
+                                
+                                if (bairrosUnicos.length > 0) {
+                                    const { data: bairrosData } = await supabase
+                                        .from('bairros_entrega')
+                                        .select('nome, tempo_entrega_minutos')
+                                        .in('nome', bairrosUnicos)
+                                    
+                                    if (bairrosData) {
+                                        bairrosData.forEach(b => {
+                                            temposBairros[b.nome] = b.tempo_entrega_minutos || 45
+                                        })
+                                    }
+                                }
+
+                                const agora = new Date()
+                                const pedidosFormatados = pedidos.map(p => {
+                                    const statusTexto: { [key: string]: string } = {
+                                        'pendente': '⏳ Aguardando confirmação do restaurante',
+                                        'confirmado': '✅ Pedido confirmado, entrando na fila',
+                                        'preparando': '🍳 Sendo preparado na cozinha',
+                                        'pronto': '✨ Pronto! Aguardando entregador',
+                                        'saiu': '🛵 Saiu para entrega',
+                                        'entregue': '✅ Entregue',
+                                        'cancelado': '❌ Cancelado'
+                                    }
+                                    
+                                    // Calcular tempo restante para entrega
+                                    const horarioPedido = new Date(p.created_at)
+                                    const tempoDecorridoMs = agora.getTime() - horarioPedido.getTime()
+                                    const tempoDecorridoMin = Math.floor(tempoDecorridoMs / 60000)
+                                    
+                                    const tempoTotalEntrega = temposBairros[p.bairro] || 45
+                                    const tempoRestante = Math.max(0, tempoTotalEntrega - tempoDecorridoMin)
+                                    
+                                    let previsaoTexto = ''
+                                    if (p.modalidade === 'entrega') {
+                                        if (p.status === 'entregue' || p.status === 'cancelado') {
+                                            previsaoTexto = ''
+                                        } else if (p.status === 'saiu') {
+                                            previsaoTexto = 'Entregador a caminho! Deve chegar em breve (5-15 min)'
+                                        } else if (tempoRestante <= 0) {
+                                            previsaoTexto = 'Previsão original já passou. Deve sair para entrega em breve!'
+                                        } else if (tempoRestante <= 10) {
+                                            previsaoTexto = `Faltam aproximadamente ${tempoRestante} minutinhos!`
+                                        } else if (tempoRestante <= 30) {
+                                            previsaoTexto = `Previsão: mais uns ${tempoRestante} minutos`
+                                        } else {
+                                            previsaoTexto = `Previsão de entrega: aproximadamente ${tempoRestante} minutos`
+                                        }
+                                    } else if (p.modalidade === 'retirada') {
+                                        if (p.status === 'pronto') {
+                                            previsaoTexto = '🎉 Já pode vir buscar!'
+                                        } else if (p.status !== 'entregue' && p.status !== 'cancelado') {
+                                            previsaoTexto = `Tempo estimado para ficar pronto: ${Math.max(15, tempoTotalEntrega - 15)} min`
+                                        }
+                                    }
+
+                                    return {
+                                        numero: p.id,
+                                        status: p.status,
+                                        status_texto: statusTexto[p.status] || p.status,
+                                        valor: `R$ ${Number(p.valor_total).toFixed(2)}`,
+                                        modalidade: p.modalidade,
+                                        bairro: p.bairro || '',
+                                        horario_pedido: new Date(p.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+                                        tempo_decorrido_minutos: tempoDecorridoMin,
+                                        previsao_entrega: previsaoTexto
+                                    }
+                                })
+
                                 toolResult = JSON.stringify({
-                                    duplicado: false,
-                                    mensagem: 'Nenhum pedido duplicado encontrado. Pode prosseguir.'
+                                    encontrado: true,
+                                    total_pedidos: pedidos.length,
+                                    pedidos: pedidosFormatados,
+                                    instrucao: 'Informe o status e a previsão de tempo de forma clara e amigável. Use a previsao_entrega que já foi calculada. Lembre que o cliente recebe notificações pelo WhatsApp quando o status muda!'
                                 })
                             }
                         } catch (e) {
-                            console.error('Erro em verificar_pedido_duplicado:', e)
+                            console.error('Erro em consultar_status_pedido:', e)
                             toolResult = JSON.stringify({
-                                duplicado: false,
-                                erro: 'Erro ao verificar duplicação, mas pode prosseguir.'
+                                erro: true,
+                                mensagem: 'Erro ao consultar pedidos. Peça desculpas e sugira que o cliente aguarde ou tente novamente.'
                             })
-                        }
-                        break
-
-                    case 'buscar_ultimo_pedido':
-                        const { data: ultimoPedido } = await supabase
-                            .from('pedidos')
-                            .select('*')
-                            .eq('phone', telefonePadrao)
-                            .order('created_at', { ascending: false })
-                            .limit(1)
-                            .single()
-                        
-                        if (ultimoPedido) {
-                            toolResult = JSON.stringify({
-                                encontrado: true,
-                                pedido: {
-                                    id: ultimoPedido.id,
-                                    itens: ultimoPedido.itens,
-                                    valor: ultimoPedido.valor_total,
-                                    status: ultimoPedido.status,
-                                    data: ultimoPedido.created_at
-                                }
-                            })
-                        } else {
-                            toolResult = JSON.stringify({ encontrado: false })
                         }
                         break
 
                     case 'pausar_ia':
                         try {
-                            // 1. Pausar IA para o cliente
-                            const { data: clienteAtualizado } = await supabase.from('dados_cliente').upsert({
+                            // Pausar IA para o cliente
+                            await supabase.from('dados_cliente').upsert({
                                 telefone: telefonePadrao,
                                 whatsapp_jid: remoteJid,
-                                atendimento_ia: 'pause'
-                            }, { onConflict: 'telefone' }).select().single()
+                                atendimento_ia: 'pause',
+                                updated_at: new Date().toISOString()
+                            }, { onConflict: 'telefone' })
 
-                            // 2. Buscar dados do cliente para o alerta
-                            const { data: cliente } = await supabase
-                                .from('dados_cliente')
-                                .select('nome_completo, nomewpp, telefone')
-                                .eq('telefone', telefonePadrao)
-                                .single()
+                            // Enviar alerta para o gerente
+                            const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
+                            const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
+                            const instanceName = instanceNameFromRequest || 'avello'
 
-                            const nomeCliente = cliente?.nome_completo || cliente?.nomewpp || 'Cliente'
-                            const telefoneCliente = telefonePadrao
+                            if (evolutionUrl && evolutionKey) {
+                                const telefoneGerente = '5527996205115@s.whatsapp.net'
+                                const motivo = args.motivo || 'Solicitação do cliente'
+                                const nomeCliente = cliente?.nome_completo || cliente?.nomewpp || pushName || 'Cliente'
 
-                            // 3. Buscar instância WhatsApp conectada
-                            const { data: instance } = await supabase
-                                .from('whatsapp_instances')
-                                .select('instance_name, status')
-                                .eq('status', 'connected')
-                                .single()
-
-                            // 4. Enviar alerta para o gerente (5527996205115)
-                            if (instance) {
-                                const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
-                                const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
-                                
-                                if (evolutionUrl && evolutionKey) {
-                                    const telefoneGerente = '5527996205115@s.whatsapp.net'
-                                    const motivo = args.motivo || 'Solicitação do cliente'
-                                    
-                                    const mensagemAlerta = `🚨 *ATENÇÃO: Cliente precisa de atendimento humano*
+                                const mensagemAlerta = `🚨 *ATENDIMENTO HUMANO SOLICITADO*
 
 👤 *Cliente:* ${nomeCliente}
-📱 *Telefone:* ${telefoneCliente}
+📱 *Telefone:* ${telefonePadrao}
 ⚠️ *Motivo:* ${motivo}
 
-A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.`
+A IA foi pausada. Por favor, assuma o atendimento.`
 
-                                    try {
-                                        await fetch(`${evolutionUrl}/message/sendText/${instance.instance_name}`, {
-                                            method: 'POST',
-                                            headers: {
-                                                'Content-Type': 'application/json',
-                                                'apikey': evolutionKey
-                                            },
-                                            body: JSON.stringify({
-                                                number: telefoneGerente,
-                                                text: mensagemAlerta,
-                                                delay: 1000
-                                            })
+                                try {
+                                    await fetch(`${evolutionUrl}/message/sendText/${instanceName}`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'apikey': evolutionKey
+                                        },
+                                        body: JSON.stringify({
+                                            number: telefoneGerente,
+                                            text: mensagemAlerta
                                         })
-
-                                        // Salvar mensagem de alerta no banco
-                                        await supabase.from('whatsapp_messages').insert({
-                                            remote_jid: telefoneGerente,
-                                            from_me: true,
-                                            message_type: 'text',
-                                            content: mensagemAlerta,
-                                            status: 'sent'
-                                        })
-                                    } catch (erroAlerta) {
-                                        console.error('Erro ao enviar alerta para gerente:', erroAlerta)
-                                        // Não falhar a operação se o alerta falhar
-                                    }
+                                    })
+                                } catch (alertError) {
+                                    console.error('Erro ao enviar alerta:', alertError)
                                 }
                             }
 
-                            toolResult = JSON.stringify({ 
-                                sucesso: true, 
-                                motivo: args.motivo,
-                                mensagem: 'Transferindo para atendente humano...',
-                                alerta_enviado: true
+                            toolResult = JSON.stringify({
+                                sucesso: true,
+                                mensagem: 'Atendimento transferido para humano. Informe ao cliente que um atendente irá ajudá-lo em breve.'
                             })
                         } catch (e) {
                             console.error('Erro em pausar_ia:', e)
-                            toolResult = JSON.stringify({ 
-                                sucesso: false,
-                                erro: e.message,
-                                mensagem: 'Erro ao pausar IA, mas tentando continuar...'
-                            })
-                        }
-                        break
-
-                    case 'calcular_taxa_entrega':
-                        // Usar RPC do banco de dados para busca inteligente de bairros
-                        const { data: bairrosData, error: bairroError } = await supabase
-                            .rpc('buscar_bairro_taxa', { bairro_busca: args.bairro })
-                        
-                        if (bairroError) {
-                            console.error('Erro ao buscar bairro:', bairroError)
-                            toolResult = JSON.stringify({
-                                atendido: false,
-                                erro: 'Erro ao verificar bairro',
-                                opcao_retirada: 'Você pode optar pela retirada no local (gratuita)!'
-                            })
-                        } else if (bairrosData && bairrosData.length > 0) {
-                            const bairroEncontrado = bairrosData[0]
-                            toolResult = JSON.stringify({
-                                atendido: true,
-                                bairro: bairroEncontrado.nome,
-                                taxa: parseFloat(bairroEncontrado.taxa_entrega),
-                                mensagem: `Atendemos ${bairroEncontrado.nome}! Taxa de entrega: R$ ${parseFloat(bairroEncontrado.taxa_entrega).toFixed(2)}`,
-                                // Se houver mais sugestões com score menor, incluir
-                                outras_opcoes: bairrosData.length > 1 
-                                    ? bairrosData.slice(1).map((b: any) => b.nome) 
-                                    : []
-                            })
-                        } else {
-                            // Bairro não encontrado - sugerir retirada
-                            toolResult = JSON.stringify({
-                                atendido: false,
-                                bairro_informado: args.bairro,
-                                mensagem: 'Infelizmente não atendemos esse bairro no momento.',
-                                sugestao: 'Você pode optar pela retirada no local!',
-                                opcao_retirada: 'A retirada é gratuita!',
-                                instrucao_CRITICA: 'NÃO aceite pedido de entrega para este bairro. Sugira retirada no local ou pergunte se o cliente quer mudar para retirada.'
-                            })
-                        }
-                        break
-
-                    case 'enviar_cardapio_pdf':
-                        try {
-                            // Enviar PDF diretamente via Evolution API
-                            const evolutionUrl = Deno.env.get('EVOLUTION_API_URL')
-                            const evolutionKey = Deno.env.get('EVOLUTION_API_KEY')
-                            
-                            // Obter instanceName do contexto (vem do webhook)
-                            // Se não vier, usar padrão 'avello'
-                            const instanceName = instanceNameFromRequest || session?.instance_name || 'avello'
-                            
-                            if (!evolutionUrl || !evolutionKey) {
-                                throw new Error('Evolution API não configurada')
-                            }
-                            
-                            const telefoneParaEnvio = args.telefone || telefonePadrao
-                            
-                            // URL do PDF no Supabase Storage (bucket: arquivos)
-                            const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-                            const pdfUrl = `${supabaseUrl}/storage/v1/object/public/arquivos/Cardapio_Imperio.pdf`
-                            
-                            // Enviar PDF via Evolution API
-                            const evolutionResponse = await fetch(`${evolutionUrl}/message/sendMedia/${instanceName}`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'apikey': evolutionKey
-                                },
-                                body: JSON.stringify({
-                                    number: telefoneParaEnvio,
-                                    mediatype: 'document',
-                                    mimetype: 'application/pdf',
-                                    media: pdfUrl,
-                                    fileName: 'Cardapio_Imperio.pdf',
-                                    caption: '📋 Aqui está nosso cardápio completo! Escolha os itens que deseja pedir.'
-                                })
-                            })
-                            
-                            if (!evolutionResponse.ok) {
-                                const errorText = await evolutionResponse.text()
-                                console.error('Erro ao enviar PDF:', evolutionResponse.status, errorText)
-                                throw new Error(`Erro ao enviar cardápio: ${evolutionResponse.status}`)
-                            }
-                            
-                            const evolutionResult = await evolutionResponse.json()
-                            console.log('PDF enviado:', evolutionResult)
-                            
-                            toolResult = JSON.stringify({
-                                sucesso: true,
-                                mensagem: 'Cardápio em PDF enviado com sucesso! O cliente receberá o PDF no WhatsApp.',
-                                instrucao: 'Informe ao cliente que o cardápio foi enviado e aguarde ele visualizar.'
-                            })
-                        } catch (e) {
-                            console.error('Erro em enviar_cardapio_pdf:', e)
                             toolResult = JSON.stringify({
                                 sucesso: false,
-                                erro: e.message,
-                                mensagem: 'Não consegui enviar o cardápio no momento. Você pode usar consultar_cardapio para mostrar o cardápio por escrito.',
-                                instrucao: 'Ofereça mostrar o cardápio por escrito usando consultar_cardapio.'
+                                mensagem: 'Erro ao transferir. Peça desculpas e diga que um atendente entrará em contato.'
                             })
                         }
                         break
@@ -1282,7 +636,6 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
                         toolResult = JSON.stringify({ erro: 'Função não reconhecida' })
                 }
 
-                // Adicionar resultado da tool
                 toolResults.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
@@ -1293,7 +646,7 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
             // Adicionar mensagem do assistente com tool_calls
             messages.push(choice.message)
 
-            // Adicionar todos os resultados das tools
+            // Adicionar resultados das tools
             for (const tr of toolResults) {
                 messages.push(tr)
             }
@@ -1308,8 +661,8 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
                 body: JSON.stringify({
                     model: 'gpt-4o-mini',
                     messages: messages,
-                    max_tokens: 600,
-                    temperature: 0.3
+                    max_tokens: 500,
+                    temperature: 0.7
                 })
             })
 
@@ -1318,12 +671,6 @@ A IA foi pausada para este cliente. Por favor, assuma o atendimento manualmente.
         } else {
             responseText = choice?.message?.content || 'Desculpe, não consegui processar sua mensagem. Pode repetir?'
         }
-
-        // Atualizar sessão
-        await supabase.from('agent_sessions').update({
-            updated_at: new Date().toISOString(),
-            last_message_at: new Date().toISOString()
-        }).eq('remote_jid', remoteJid)
 
         return new Response(JSON.stringify({ response: responseText }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }

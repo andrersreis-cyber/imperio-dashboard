@@ -54,16 +54,52 @@ export function PDV() {
     const [movimentacoes, setMovimentacoes] = useState([])
     const [relatorioCaixa, setRelatorioCaixa] = useState(null)
 
+    // Estados para comandas
+    const [comandasAbertas, setComandasAbertas] = useState([])
+    const [comandaSelecionada, setComandaSelecionada] = useState(null)
+    const [itensComandaAtual, setItensComandaAtual] = useState([])
+
     // ========== INICIALIZAÇÃO ==========
     useEffect(() => {
         const init = async () => {
             console.log('[PDV] Iniciando componente...')
             await fetchData()
             await verificarCaixa()
+            await fetchComandasAbertas()
             setLoading(false)
             searchRef.current?.focus()
         }
         init()
+
+        // Realtime: atualizar comandas e mesas quando houver mudanças
+        const channelComandas = supabase
+            .channel('pdv-comandas-changes')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'comandas' },
+                () => {
+                    console.log('[PDV] Atualização em comandas')
+                    fetchComandasAbertas()
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'itens_comanda' },
+                () => {
+                    console.log('[PDV] Atualização em itens_comanda')
+                    fetchComandasAbertas()
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'mesas' },
+                () => {
+                    console.log('[PDV] Atualização em mesas')
+                    fetchData() // Recarrega mesas
+                }
+            )
+            .subscribe()
+
+        return () => {
+            supabase.removeChannel(channelComandas)
+        }
     }, [])
 
     // Debug: monitorar estado do caixa
@@ -73,6 +109,38 @@ export function PDV() {
             loading
         })
     }, [caixaAberto, loading])
+
+    // Realtime: atualizar histórico quando caixa está aberto
+    useEffect(() => {
+        if (!caixaAberto) return
+
+        const channelVendas = supabase
+            .channel('pdv-vendas-changes')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'vendas_pdv', filter: `caixa_id=eq.${caixaAberto.id}` },
+                (payload) => {
+                    console.log('[PDV] Nova venda:', payload)
+                    // Se o histórico está aberto, atualizar
+                    if (showHistorico) {
+                        carregarHistorico()
+                    }
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'movimentacoes_caixa', filter: `caixa_id=eq.${caixaAberto.id}` },
+                (payload) => {
+                    console.log('[PDV] Nova movimentação:', payload)
+                    if (showHistorico) {
+                        carregarHistorico()
+                    }
+                }
+            )
+            .subscribe()
+
+        return () => {
+            supabase.removeChannel(channelVendas)
+        }
+    }, [caixaAberto, showHistorico])
 
     // ========== FUNÇÕES DE DADOS ==========
     const fetchData = async () => {
@@ -84,9 +152,55 @@ export function PDV() {
             ])
             if (catsRes.data) setCategorias(catsRes.data)
             if (prodsRes.data) setProdutos(prodsRes.data)
-            if (mesasRes.data) setMesas(mesasRes.data)
+            if (mesasRes.data) {
+                console.log('[PDV] Mesas carregadas:', mesasRes.data.length, mesasRes.data.map(m => m.numero))
+                setMesas(mesasRes.data)
+            }
+            if (mesasRes.error) {
+                console.error('[PDV] Erro ao carregar mesas:', mesasRes.error)
+            }
         } catch (err) {
             console.error('[PDV] Erro ao carregar dados:', err)
+        }
+    }
+
+    const fetchComandasAbertas = async () => {
+        try {
+            const { data } = await supabase
+                .from('comandas')
+                .select(`*, mesas (id, numero), itens_comanda (*)`)
+                .eq('status', 'aberta')
+            
+            if (data) {
+                setComandasAbertas(data)
+                console.log('[PDV] Comandas abertas:', data.length)
+            }
+        } catch (err) {
+            console.error('[PDV] Erro ao carregar comandas:', err)
+        }
+    }
+
+    const getComandaDaMesa = (mesaId) => {
+        return comandasAbertas.find(c => c.mesa_id === mesaId)
+    }
+
+    const selecionarMesa = async (mesa) => {
+        setMesaSelecionada(mesa)
+        setShowSeletorMesa(false)
+        
+        if (mesa) {
+            const comanda = getComandaDaMesa(mesa.id)
+            if (comanda) {
+                setComandaSelecionada(comanda)
+                setItensComandaAtual(comanda.itens_comanda || [])
+                console.log('[PDV] Mesa com comanda aberta:', comanda.id)
+            } else {
+                setComandaSelecionada(null)
+                setItensComandaAtual([])
+            }
+        } else {
+            setComandaSelecionada(null)
+            setItensComandaAtual([])
         }
     }
 
@@ -321,13 +435,93 @@ export function PDV() {
                 quantidade: item.quantidade 
             }))
             
+            // Se tem comanda selecionada, adicionar itens à comanda
+            if (comandaSelecionada) {
+                // Adicionar itens à comanda existente
+                const itensComanda = carrinho.map(item => ({
+                    comanda_id: comandaSelecionada.id,
+                    produto_id: item.id,
+                    nome_produto: item.nome,
+                    quantidade: item.quantidade,
+                    preco_unitario: item.preco,
+                    garcom: 'PDV'
+                }))
+                
+                const { error: erroItens } = await supabase
+                    .from('itens_comanda')
+                    .insert(itensComanda)
+                
+                if (erroItens) throw erroItens
+                
+                // Buscar pedido existente da comanda
+                const { data: pedidoExistente } = await supabase
+                    .from('pedidos')
+                    .select('*')
+                    .ilike('observacoes', `%Comanda #${comandaSelecionada.id}%`)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single()
+                
+                // Buscar total atualizado da comanda (trigger já atualizou)
+                const { data: comandaAtualizada } = await supabase
+                    .from('comandas')
+                    .select('valor_total')
+                    .eq('id', comandaSelecionada.id)
+                    .single()
+                
+                const novoTotal = comandaAtualizada?.valor_total || 0
+                
+                if (pedidoExistente) {
+                    // Atualizar pedido existente com novos itens
+                    const itensAntigos = Array.isArray(pedidoExistente.itens) ? pedidoExistente.itens : []
+                    const novosItens = [...itensAntigos, ...itensJson]
+                    
+                    await supabase.from('pedidos')
+                        .update({ 
+                            itens: novosItens,
+                            valor_total: novoTotal,
+                            observacoes: `${pedidoExistente.observacoes} + PDV`
+                        })
+                        .eq('id', pedidoExistente.id)
+                    
+                    console.log('[PDV] Pedido atualizado:', pedidoExistente.id)
+                } else {
+                    // Criar novo pedido se não existir
+                    await supabase.from('pedidos').insert({ 
+                        itens: itensJson,
+                        valor_total: novoTotal, 
+                        taxa_entrega: 0, 
+                        endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
+                        bairro: 'No local', 
+                        forma_pagamento: 'pendente',
+                        observacoes: `Comanda #${comandaSelecionada.id} - PDV`, 
+                        status: 'preparando',
+                        modalidade: 'mesa' 
+                    })
+                }
+                
+                // Atualizar comandas abertas
+                await fetchComandasAbertas()
+                
+                alert(`Itens adicionados à Comanda #${comandaSelecionada.id}`)
+                
+                setCarrinho([])
+                setDesconto(0)
+                setShowPagamento(false)
+                // Manter a mesa selecionada para continuar adicionando
+                return
+            }
+            
+            // Venda normal (balcão ou mesa sem comanda)
             const { data, error } = await supabase.from('vendas_pdv').insert({ 
                 caixa_id: caixaAberto.id, 
                 itens: itensJson, 
                 subtotal: calcularSubtotal(), 
                 desconto: desconto, 
                 total: calcularTotal(), 
-                forma_pagamento: formaPagamento 
+                forma_pagamento: formaPagamento,
+                origem: mesaSelecionada ? 'pdv_mesa' : 'pdv',
+                mesa_numero: mesaSelecionada?.numero || null
             }).select().single()
 
             if (error) throw error
@@ -336,23 +530,23 @@ export function PDV() {
                 caixa_id: caixaAberto.id, 
                 tipo: 'entrada', 
                 valor: calcularTotal(), 
-                descricao: `Venda #${data.id}`, 
+                descricao: mesaSelecionada ? `PDV Mesa ${mesaSelecionada.numero} #${data.id}` : `Venda #${data.id}`, 
                 forma_pagamento: formaPagamento 
             })
 
             imprimirCupom(data, formaPagamento)
             
             if (mesaSelecionada) {
-                const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
+                // Pedido de mesa vai direto para preparação (cliente no local)
                 await supabase.from('pedidos').insert({ 
-                    itens: itensTexto, 
+                    itens: itensJson, 
                     valor_total: calcularTotal(), 
                     taxa_entrega: 0, 
                     endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
                     bairro: 'No local', 
                     forma_pagamento: formaPagamento, 
                     observacoes: `MESA ${mesaSelecionada.numero} - PDV #${data.id}`, 
-                    status: 'pendente', 
+                    status: 'preparando', // Pedido de mesa vai direto para preparação
                     modalidade: 'mesa' 
                 })
                 await supabase.from('mesas').update({ status: 'ocupada' }).eq('id', mesaSelecionada.id)
@@ -362,6 +556,8 @@ export function PDV() {
             setDesconto(0)
             setShowPagamento(false)
             setMesaSelecionada(null)
+            setComandaSelecionada(null)
+            setItensComandaAtual([])
         } catch (error) {
             console.error('[PDV] Erro ao finalizar venda:', error)
             alert(`Erro: ${error.message}`)
@@ -582,39 +778,89 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                     <div className="relative">
                         <button 
                             onClick={() => setShowSeletorMesa(!showSeletorMesa)} 
-                            className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${mesaSelecionada ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400' : 'bg-gray-800 border border-gray-700 text-gray-400'}`}
+                            className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${
+                                comandaSelecionada 
+                                    ? 'bg-orange-500/20 border-2 border-orange-500 text-orange-400'
+                                    : mesaSelecionada 
+                                        ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400' 
+                                        : 'bg-gray-800 border border-gray-700 text-gray-400'
+                            }`}
                         >
                             <div className="flex items-center gap-2 font-medium">
                                 <UtensilsCrossed size={18} />
-                                {mesaSelecionada ? `Mesa ${mesaSelecionada.numero}` : 'Balcão (sem mesa)'}
+                                {mesaSelecionada 
+                                    ? comandaSelecionada 
+                                        ? `Mesa ${mesaSelecionada.numero} (Comanda #${comandaSelecionada.id})`
+                                        : `Mesa ${mesaSelecionada.numero}` 
+                                    : 'Balcão (sem mesa)'}
                             </div>
                             <ChevronDown size={18} className={showSeletorMesa ? 'rotate-180' : ''} />
                         </button>
                         {showSeletorMesa && (
-                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-48 overflow-y-auto">
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
                                 <button 
-                                    onClick={() => { setMesaSelecionada(null); setShowSeletorMesa(false); }} 
+                                    onClick={() => selecionarMesa(null)} 
                                     className={`w-full p-3 text-left hover:bg-gray-700 flex items-center gap-2 ${!mesaSelecionada ? 'bg-gray-700' : ''}`}
                                 >
                                     <Package size={16} />Balcão (sem mesa)
                                 </button>
-                                {mesas.map(mesa => (
-                                    <button 
-                                        key={mesa.id} 
-                                        onClick={() => { setMesaSelecionada(mesa); setShowSeletorMesa(false); }} 
-                                        className={`w-full p-3 text-left hover:bg-gray-700 flex items-center justify-between ${mesaSelecionada?.id === mesa.id ? 'bg-purple-500/20 text-purple-400' : ''}`}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <UtensilsCrossed size={16} />Mesa {mesa.numero}
-                                        </span>
-                                        <span className={`text-xs px-2 py-0.5 rounded ${mesa.status === 'livre' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                                            {mesa.status}
-                                        </span>
-                                    </button>
-                                ))}
+                                {mesas.map(mesa => {
+                                    const comanda = getComandaDaMesa(mesa.id)
+                                    const totalItens = comanda?.itens_comanda?.length || 0
+                                    return (
+                                        <button 
+                                            key={mesa.id} 
+                                            onClick={() => selecionarMesa(mesa)} 
+                                            className={`w-full p-3 text-left hover:bg-gray-700 flex items-center justify-between ${
+                                                mesaSelecionada?.id === mesa.id 
+                                                    ? comanda 
+                                                        ? 'bg-orange-500/20 text-orange-400' 
+                                                        : 'bg-purple-500/20 text-purple-400' 
+                                                    : ''
+                                            }`}
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <UtensilsCrossed size={16} />
+                                                Mesa {mesa.numero}
+                                                {comanda && (
+                                                    <span className="text-xs bg-orange-500/30 text-orange-300 px-2 py-0.5 rounded">
+                                                        Comanda #{comanda.id} ({totalItens} itens)
+                                                    </span>
+                                                )}
+                                            </span>
+                                            <span className={`text-xs px-2 py-0.5 rounded ${mesa.status === 'livre' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                                {mesa.status}
+                                            </span>
+                                        </button>
+                                    )
+                                })}
                             </div>
                         )}
                     </div>
+                    
+                    {/* Indicador de comanda aberta com itens existentes */}
+                    {comandaSelecionada && (
+                        <div className="mt-2 bg-orange-500/10 border border-orange-500/30 rounded-lg overflow-hidden">
+                            <div className="p-2 border-b border-orange-500/20">
+                                <p className="text-orange-400 font-medium text-sm">
+                                    📋 Comanda #{comandaSelecionada.id} - R$ {Number(comandaSelecionada.valor_total || 0).toFixed(2)}
+                                </p>
+                            </div>
+                            {itensComandaAtual.length > 0 && (
+                                <div className="max-h-32 overflow-y-auto">
+                                    {itensComandaAtual.map((item, idx) => (
+                                        <div key={idx} className="px-2 py-1.5 flex justify-between text-xs border-b border-orange-500/10 last:border-0">
+                                            <span className="text-gray-300">{item.quantidade}x {item.nome_produto}</span>
+                                            <span className="text-orange-400">R$ {(item.quantidade * item.preco_unitario).toFixed(2)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="p-2 bg-orange-500/5 text-xs text-gray-400">
+                                Novos itens serão adicionados à comanda
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Header do carrinho */}
@@ -688,13 +934,23 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                             <span className="text-gold font-display tracking-wide">{formatarPreco(calcularTotal())}</span>
                         </div>
                     </div>
-                    <Button 
-                        onClick={() => setShowPagamento(true)} 
-                        disabled={carrinho.length === 0} 
-                        className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 shadow-lg shadow-green-900/20"
-                    >
-                        <DollarSign size={24} className="mr-2" /> PAGAMENTO
-                    </Button>
+                    {comandaSelecionada ? (
+                        <Button 
+                            onClick={() => finalizarVenda('pendente')} 
+                            disabled={carrinho.length === 0} 
+                            className="w-full h-14 text-lg bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-900/20"
+                        >
+                            <Plus size={24} className="mr-2" /> ADICIONAR À COMANDA
+                        </Button>
+                    ) : (
+                        <Button 
+                            onClick={() => setShowPagamento(true)} 
+                            disabled={carrinho.length === 0} 
+                            className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 shadow-lg shadow-green-900/20"
+                        >
+                            <DollarSign size={24} className="mr-2" /> PAGAMENTO
+                        </Button>
+                    )}
                 </div>
             </div>
 
@@ -812,18 +1068,35 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                                     {vendasDoDia.length === 0 ? (
                                         <p className="text-center text-gray-500 py-4">Nenhuma venda</p>
                                     ) : (
-                                        vendasDoDia.map(v => (
-                                            <div key={v.id} className="p-3 bg-gray-800/50 rounded flex justify-between items-center">
-                                                <div>
-                                                    <p className="font-bold text-white">Venda #{v.id}</p>
-                                                    <p className="text-xs text-gray-400">{new Date(v.created_at).toLocaleTimeString()}</p>
+                                        vendasDoDia.map(v => {
+                                            const getOrigemLabel = (origem, mesaNum, comandaId) => {
+                                                if (origem === 'comanda') return `Comanda #${comandaId || '?'} - Mesa ${mesaNum || '?'}`
+                                                if (origem === 'pdv_mesa') return `PDV Mesa ${mesaNum || '?'}`
+                                                return 'PDV Balcão'
+                                            }
+                                            const getOrigemColor = (origem) => {
+                                                if (origem === 'comanda') return 'text-orange-400 bg-orange-500/20'
+                                                if (origem === 'pdv_mesa') return 'text-purple-400 bg-purple-500/20'
+                                                return 'text-green-400 bg-green-500/20'
+                                            }
+                                            return (
+                                                <div key={v.id} className="p-3 bg-gray-800/50 rounded">
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <div>
+                                                            <p className="font-bold text-white">Venda #{v.id}</p>
+                                                            <p className="text-xs text-gray-400">{new Date(v.created_at).toLocaleTimeString()}</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-gold font-bold">{formatarPreco(v.total)}</p>
+                                                            <p className="text-xs uppercase text-gray-400">{v.forma_pagamento}</p>
+                                                        </div>
+                                                    </div>
+                                                    <span className={`text-xs px-2 py-0.5 rounded ${getOrigemColor(v.origem)}`}>
+                                                        {getOrigemLabel(v.origem, v.mesa_numero, v.comanda_id)}
+                                                    </span>
                                                 </div>
-                                                <div className="text-right">
-                                                    <p className="text-gold font-bold">{formatarPreco(v.total)}</p>
-                                                    <p className="text-xs uppercase text-gray-400">{v.forma_pagamento}</p>
-                                                </div>
-                                            </div>
-                                        ))
+                                            )
+                                        })
                                     )}
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-2 space-y-2">

@@ -230,38 +230,74 @@ export function Garcom() {
             .insert(itensParaInserir)
 
         if (!error) {
-            // Calcular total dos itens enviados
-            const totalItens = carrinho.reduce((sum, item) => sum + (item.preco * item.quantidade), 0)
+            // Buscar total atualizado da comanda (trigger já atualizou)
+            const { data: comandaComTotal } = await supabase
+                .from('comandas')
+                .select('valor_total')
+                .eq('id', comanda.id)
+                .single()
+            
+            const novoTotal = comandaComTotal?.valor_total || 0
 
-            // Criar pedido na tabela pedidos para aparecer no filtro de Mesa
-            const { data: pedidoData, error: pedidoError } = await supabase
+            // Itens em formato JSON para o pedido
+            const itensJson = carrinho.map(item => ({
+                nome: item.nome,
+                quantidade: item.quantidade,
+                preco_unitario: Number(item.preco || 0),
+                observacao: item.observacao || null
+            }))
+
+            // Verificar se já existe pedido para esta comanda
+            const { data: pedidoExistente } = await supabase
                 .from('pedidos')
-                .insert({
-                    phone: '',
-                    nome_cliente: `Mesa ${mesaSelecionada.numero}`,
-                    // Padronizar itens como JSON (array de objetos) para ficar consistente com delivery/IA
-                    itens: carrinho.map(item => ({
-                        nome: item.nome,
-                        quantidade: item.quantidade,
-                        preco_unitario: Number(item.preco || 0),
-                        observacao: item.observacao || null
-                    })),
-                    valor_total: totalItens,
-                    taxa_entrega: 0,
-                    endereco_entrega: `Mesa ${mesaSelecionada.numero}`,
-                    bairro: 'No local',
-                    forma_pagamento: 'pendente',
-                    observacoes: `Comanda #${comanda.id} - Garçom: ${nomeGarcom}`,
-                    status: 'pendente',
-                    modalidade: 'mesa'
-                })
-                .select()
+                .select('*')
+                .ilike('observacoes', `%Comanda #${comanda.id}%`)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single()
 
-            if (pedidoError) {
-                console.error('Erro ao criar pedido:', pedidoError)
-                alert('Erro ao criar pedido: ' + pedidoError.message)
+            if (pedidoExistente) {
+                // Atualizar pedido existente com novos itens
+                const itensAntigos = Array.isArray(pedidoExistente.itens) ? pedidoExistente.itens : []
+                const novosItens = [...itensAntigos, ...itensJson]
+                
+                const { error: updateError } = await supabase
+                    .from('pedidos')
+                    .update({ 
+                        itens: novosItens,
+                        valor_total: novoTotal
+                    })
+                    .eq('id', pedidoExistente.id)
+                
+                if (updateError) {
+                    console.error('Erro ao atualizar pedido:', updateError)
+                } else {
+                    console.log('Pedido atualizado:', pedidoExistente.id)
+                }
             } else {
-                console.log('Pedido criado:', pedidoData)
+                // Criar novo pedido se não existir
+                const { data: pedidoData, error: pedidoError } = await supabase
+                    .from('pedidos')
+                    .insert({
+                        phone: '',
+                        nome_cliente: `Mesa ${mesaSelecionada.numero}`,
+                        itens: itensJson,
+                        valor_total: novoTotal,
+                        taxa_entrega: 0,
+                        endereco_entrega: `Mesa ${mesaSelecionada.numero}`,
+                        bairro: 'No local',
+                        forma_pagamento: 'pendente',
+                        observacoes: `Comanda #${comanda.id} - Garçom: ${nomeGarcom}`,
+                        status: 'preparando',
+                        modalidade: 'mesa'
+                    })
+                    .select()
+
+                if (pedidoError) {
+                    console.error('Erro ao criar pedido:', pedidoError)
+                } else {
+                    console.log('Pedido criado:', pedidoData)
+                }
             }
 
             const { data: itensAtualizados } = await supabase
