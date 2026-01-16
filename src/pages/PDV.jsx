@@ -70,6 +70,29 @@ export function PDV() {
             searchRef.current?.focus()
         }
         init()
+
+        // Realtime: atualizar comandas quando houver mudanças
+        const channelComandas = supabase
+            .channel('pdv-comandas-changes')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'comandas' },
+                () => {
+                    console.log('[PDV] Atualização em comandas')
+                    fetchComandasAbertas()
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'itens_comanda' },
+                () => {
+                    console.log('[PDV] Atualização em itens_comanda')
+                    fetchComandasAbertas()
+                }
+            )
+            .subscribe()
+
+        return () => {
+            supabase.removeChannel(channelComandas)
+        }
     }, [])
 
     // Debug: monitorar estado do caixa
@@ -79,6 +102,38 @@ export function PDV() {
             loading
         })
     }, [caixaAberto, loading])
+
+    // Realtime: atualizar histórico quando caixa está aberto
+    useEffect(() => {
+        if (!caixaAberto) return
+
+        const channelVendas = supabase
+            .channel('pdv-vendas-changes')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'vendas_pdv', filter: `caixa_id=eq.${caixaAberto.id}` },
+                (payload) => {
+                    console.log('[PDV] Nova venda:', payload)
+                    // Se o histórico está aberto, atualizar
+                    if (showHistorico) {
+                        carregarHistorico()
+                    }
+                }
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'movimentacoes_caixa', filter: `caixa_id=eq.${caixaAberto.id}` },
+                (payload) => {
+                    console.log('[PDV] Nova movimentação:', payload)
+                    if (showHistorico) {
+                        carregarHistorico()
+                    }
+                }
+            )
+            .subscribe()
+
+        return () => {
+            supabase.removeChannel(channelVendas)
+        }
+    }, [caixaAberto, showHistorico])
 
     // ========== FUNÇÕES DE DADOS ==========
     const fetchData = async () => {
@@ -953,18 +1008,35 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                                     {vendasDoDia.length === 0 ? (
                                         <p className="text-center text-gray-500 py-4">Nenhuma venda</p>
                                     ) : (
-                                        vendasDoDia.map(v => (
-                                            <div key={v.id} className="p-3 bg-gray-800/50 rounded flex justify-between items-center">
-                                                <div>
-                                                    <p className="font-bold text-white">Venda #{v.id}</p>
-                                                    <p className="text-xs text-gray-400">{new Date(v.created_at).toLocaleTimeString()}</p>
+                                        vendasDoDia.map(v => {
+                                            const getOrigemLabel = (origem, mesaNum, comandaId) => {
+                                                if (origem === 'comanda') return `Comanda #${comandaId || '?'} - Mesa ${mesaNum || '?'}`
+                                                if (origem === 'pdv_mesa') return `PDV Mesa ${mesaNum || '?'}`
+                                                return 'PDV Balcão'
+                                            }
+                                            const getOrigemColor = (origem) => {
+                                                if (origem === 'comanda') return 'text-orange-400 bg-orange-500/20'
+                                                if (origem === 'pdv_mesa') return 'text-purple-400 bg-purple-500/20'
+                                                return 'text-green-400 bg-green-500/20'
+                                            }
+                                            return (
+                                                <div key={v.id} className="p-3 bg-gray-800/50 rounded">
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <div>
+                                                            <p className="font-bold text-white">Venda #{v.id}</p>
+                                                            <p className="text-xs text-gray-400">{new Date(v.created_at).toLocaleTimeString()}</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <p className="text-gold font-bold">{formatarPreco(v.total)}</p>
+                                                            <p className="text-xs uppercase text-gray-400">{v.forma_pagamento}</p>
+                                                        </div>
+                                                    </div>
+                                                    <span className={`text-xs px-2 py-0.5 rounded ${getOrigemColor(v.origem)}`}>
+                                                        {getOrigemLabel(v.origem, v.mesa_numero, v.comanda_id)}
+                                                    </span>
                                                 </div>
-                                                <div className="text-right">
-                                                    <p className="text-gold font-bold">{formatarPreco(v.total)}</p>
-                                                    <p className="text-xs uppercase text-gray-400">{v.forma_pagamento}</p>
-                                                </div>
-                                            </div>
-                                        ))
+                                            )
+                                        })
                                     )}
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-2 space-y-2">
