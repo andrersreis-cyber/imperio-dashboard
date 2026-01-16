@@ -152,7 +152,13 @@ export function PDV() {
             ])
             if (catsRes.data) setCategorias(catsRes.data)
             if (prodsRes.data) setProdutos(prodsRes.data)
-            if (mesasRes.data) setMesas(mesasRes.data)
+            if (mesasRes.data) {
+                console.log('[PDV] Mesas carregadas:', mesasRes.data.length, mesasRes.data.map(m => m.numero))
+                setMesas(mesasRes.data)
+            }
+            if (mesasRes.error) {
+                console.error('[PDV] Erro ao carregar mesas:', mesasRes.error)
+            }
         } catch (err) {
             console.error('[PDV] Erro ao carregar dados:', err)
         }
