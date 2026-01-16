@@ -54,12 +54,18 @@ export function PDV() {
     const [movimentacoes, setMovimentacoes] = useState([])
     const [relatorioCaixa, setRelatorioCaixa] = useState(null)
 
+    // Estados para comandas
+    const [comandasAbertas, setComandasAbertas] = useState([])
+    const [comandaSelecionada, setComandaSelecionada] = useState(null)
+    const [itensComandaAtual, setItensComandaAtual] = useState([])
+
     // ========== INICIALIZAÇÃO ==========
     useEffect(() => {
         const init = async () => {
             console.log('[PDV] Iniciando componente...')
             await fetchData()
             await verificarCaixa()
+            await fetchComandasAbertas()
             setLoading(false)
             searchRef.current?.focus()
         }
@@ -87,6 +93,46 @@ export function PDV() {
             if (mesasRes.data) setMesas(mesasRes.data)
         } catch (err) {
             console.error('[PDV] Erro ao carregar dados:', err)
+        }
+    }
+
+    const fetchComandasAbertas = async () => {
+        try {
+            const { data } = await supabase
+                .from('comandas')
+                .select(`*, mesas (id, numero), itens_comanda (*)`)
+                .eq('status', 'aberta')
+            
+            if (data) {
+                setComandasAbertas(data)
+                console.log('[PDV] Comandas abertas:', data.length)
+            }
+        } catch (err) {
+            console.error('[PDV] Erro ao carregar comandas:', err)
+        }
+    }
+
+    const getComandaDaMesa = (mesaId) => {
+        return comandasAbertas.find(c => c.mesa_id === mesaId)
+    }
+
+    const selecionarMesa = async (mesa) => {
+        setMesaSelecionada(mesa)
+        setShowSeletorMesa(false)
+        
+        if (mesa) {
+            const comanda = getComandaDaMesa(mesa.id)
+            if (comanda) {
+                setComandaSelecionada(comanda)
+                setItensComandaAtual(comanda.itens_comanda || [])
+                console.log('[PDV] Mesa com comanda aberta:', comanda.id)
+            } else {
+                setComandaSelecionada(null)
+                setItensComandaAtual([])
+            }
+        } else {
+            setComandaSelecionada(null)
+            setItensComandaAtual([])
         }
     }
 
@@ -321,13 +367,59 @@ export function PDV() {
                 quantidade: item.quantidade 
             }))
             
+            // Se tem comanda selecionada, adicionar itens à comanda
+            if (comandaSelecionada) {
+                // Adicionar itens à comanda existente
+                const itensComanda = carrinho.map(item => ({
+                    comanda_id: comandaSelecionada.id,
+                    produto_id: item.id,
+                    nome_produto: item.nome,
+                    quantidade: item.quantidade,
+                    preco_unitario: item.preco,
+                    garcom: 'PDV'
+                }))
+                
+                const { error: erroItens } = await supabase
+                    .from('itens_comanda')
+                    .insert(itensComanda)
+                
+                if (erroItens) throw erroItens
+                
+                // Criar pedido para cozinha
+                await supabase.from('pedidos').insert({ 
+                    itens: itensJson,
+                    valor_total: calcularSubtotal(), 
+                    taxa_entrega: 0, 
+                    endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
+                    bairro: 'No local', 
+                    forma_pagamento: 'pendente',
+                    observacoes: `Comanda #${comandaSelecionada.id} - PDV`, 
+                    status: 'pendente', 
+                    modalidade: 'mesa' 
+                })
+                
+                // Atualizar comandas abertas
+                await fetchComandasAbertas()
+                
+                alert(`Itens adicionados à Comanda #${comandaSelecionada.id}`)
+                
+                setCarrinho([])
+                setDesconto(0)
+                setShowPagamento(false)
+                // Manter a mesa selecionada para continuar adicionando
+                return
+            }
+            
+            // Venda normal (balcão ou mesa sem comanda)
             const { data, error } = await supabase.from('vendas_pdv').insert({ 
                 caixa_id: caixaAberto.id, 
                 itens: itensJson, 
                 subtotal: calcularSubtotal(), 
                 desconto: desconto, 
                 total: calcularTotal(), 
-                forma_pagamento: formaPagamento 
+                forma_pagamento: formaPagamento,
+                origem: mesaSelecionada ? 'pdv_mesa' : 'pdv',
+                mesa_numero: mesaSelecionada?.numero || null
             }).select().single()
 
             if (error) throw error
@@ -336,16 +428,15 @@ export function PDV() {
                 caixa_id: caixaAberto.id, 
                 tipo: 'entrada', 
                 valor: calcularTotal(), 
-                descricao: `Venda #${data.id}`, 
+                descricao: mesaSelecionada ? `PDV Mesa ${mesaSelecionada.numero} #${data.id}` : `Venda #${data.id}`, 
                 forma_pagamento: formaPagamento 
             })
 
             imprimirCupom(data, formaPagamento)
             
             if (mesaSelecionada) {
-                const itensTexto = carrinho.map(item => `${item.quantidade}x ${item.nome}`).join(', ')
                 await supabase.from('pedidos').insert({ 
-                    itens: itensTexto, 
+                    itens: itensJson, 
                     valor_total: calcularTotal(), 
                     taxa_entrega: 0, 
                     endereco_entrega: `Mesa ${mesaSelecionada.numero}`, 
@@ -362,6 +453,8 @@ export function PDV() {
             setDesconto(0)
             setShowPagamento(false)
             setMesaSelecionada(null)
+            setComandaSelecionada(null)
+            setItensComandaAtual([])
         } catch (error) {
             console.error('[PDV] Erro ao finalizar venda:', error)
             alert(`Erro: ${error.message}`)
@@ -582,39 +675,77 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                     <div className="relative">
                         <button 
                             onClick={() => setShowSeletorMesa(!showSeletorMesa)} 
-                            className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${mesaSelecionada ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400' : 'bg-gray-800 border border-gray-700 text-gray-400'}`}
+                            className={`w-full p-3 rounded-lg flex items-center justify-between transition-colors ${
+                                comandaSelecionada 
+                                    ? 'bg-orange-500/20 border-2 border-orange-500 text-orange-400'
+                                    : mesaSelecionada 
+                                        ? 'bg-purple-500/20 border-2 border-purple-500 text-purple-400' 
+                                        : 'bg-gray-800 border border-gray-700 text-gray-400'
+                            }`}
                         >
                             <div className="flex items-center gap-2 font-medium">
                                 <UtensilsCrossed size={18} />
-                                {mesaSelecionada ? `Mesa ${mesaSelecionada.numero}` : 'Balcão (sem mesa)'}
+                                {mesaSelecionada 
+                                    ? comandaSelecionada 
+                                        ? `Mesa ${mesaSelecionada.numero} (Comanda #${comandaSelecionada.id})`
+                                        : `Mesa ${mesaSelecionada.numero}` 
+                                    : 'Balcão (sem mesa)'}
                             </div>
                             <ChevronDown size={18} className={showSeletorMesa ? 'rotate-180' : ''} />
                         </button>
                         {showSeletorMesa && (
-                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-48 overflow-y-auto">
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
                                 <button 
-                                    onClick={() => { setMesaSelecionada(null); setShowSeletorMesa(false); }} 
+                                    onClick={() => selecionarMesa(null)} 
                                     className={`w-full p-3 text-left hover:bg-gray-700 flex items-center gap-2 ${!mesaSelecionada ? 'bg-gray-700' : ''}`}
                                 >
                                     <Package size={16} />Balcão (sem mesa)
                                 </button>
-                                {mesas.map(mesa => (
-                                    <button 
-                                        key={mesa.id} 
-                                        onClick={() => { setMesaSelecionada(mesa); setShowSeletorMesa(false); }} 
-                                        className={`w-full p-3 text-left hover:bg-gray-700 flex items-center justify-between ${mesaSelecionada?.id === mesa.id ? 'bg-purple-500/20 text-purple-400' : ''}`}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <UtensilsCrossed size={16} />Mesa {mesa.numero}
-                                        </span>
-                                        <span className={`text-xs px-2 py-0.5 rounded ${mesa.status === 'livre' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                                            {mesa.status}
-                                        </span>
-                                    </button>
-                                ))}
+                                {mesas.map(mesa => {
+                                    const comanda = getComandaDaMesa(mesa.id)
+                                    const totalItens = comanda?.itens_comanda?.length || 0
+                                    return (
+                                        <button 
+                                            key={mesa.id} 
+                                            onClick={() => selecionarMesa(mesa)} 
+                                            className={`w-full p-3 text-left hover:bg-gray-700 flex items-center justify-between ${
+                                                mesaSelecionada?.id === mesa.id 
+                                                    ? comanda 
+                                                        ? 'bg-orange-500/20 text-orange-400' 
+                                                        : 'bg-purple-500/20 text-purple-400' 
+                                                    : ''
+                                            }`}
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <UtensilsCrossed size={16} />
+                                                Mesa {mesa.numero}
+                                                {comanda && (
+                                                    <span className="text-xs bg-orange-500/30 text-orange-300 px-2 py-0.5 rounded">
+                                                        Comanda #{comanda.id} ({totalItens} itens)
+                                                    </span>
+                                                )}
+                                            </span>
+                                            <span className={`text-xs px-2 py-0.5 rounded ${mesa.status === 'livre' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                                {mesa.status}
+                                            </span>
+                                        </button>
+                                    )
+                                })}
                             </div>
                         )}
                     </div>
+                    
+                    {/* Indicador de comanda aberta */}
+                    {comandaSelecionada && (
+                        <div className="mt-2 p-2 bg-orange-500/10 border border-orange-500/30 rounded-lg text-xs">
+                            <p className="text-orange-400 font-medium">
+                                📋 Comanda #{comandaSelecionada.id} - {itensComandaAtual.length} item(s) já na comanda
+                            </p>
+                            <p className="text-gray-400 mt-1">
+                                Os itens serão adicionados à comanda existente
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Header do carrinho */}
@@ -688,13 +819,23 @@ ${carrinho.map(item => ` ${item.quantidade}x ${item.nome.substring(0, 20).padEnd
                             <span className="text-gold font-display tracking-wide">{formatarPreco(calcularTotal())}</span>
                         </div>
                     </div>
-                    <Button 
-                        onClick={() => setShowPagamento(true)} 
-                        disabled={carrinho.length === 0} 
-                        className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 shadow-lg shadow-green-900/20"
-                    >
-                        <DollarSign size={24} className="mr-2" /> PAGAMENTO
-                    </Button>
+                    {comandaSelecionada ? (
+                        <Button 
+                            onClick={() => finalizarVenda('pendente')} 
+                            disabled={carrinho.length === 0} 
+                            className="w-full h-14 text-lg bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-900/20"
+                        >
+                            <Plus size={24} className="mr-2" /> ADICIONAR À COMANDA
+                        </Button>
+                    ) : (
+                        <Button 
+                            onClick={() => setShowPagamento(true)} 
+                            disabled={carrinho.length === 0} 
+                            className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 shadow-lg shadow-green-900/20"
+                        >
+                            <DollarSign size={24} className="mr-2" /> PAGAMENTO
+                        </Button>
+                    )}
                 </div>
             </div>
 
